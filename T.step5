@@ -1,0 +1,79 @@
+#!
+#########################################################
+# Help                                                  #
+#########################################################
+Help()
+{
+   # Display Help
+   echo "Add description of the script functions here."
+   echo
+   echo "Syntax: scriptTemplate [-H|d|p|f]"
+   echo "options:"
+   echo "H     Print this Help."
+   echo "p     Plasmid type to be evaluated"
+   echo "d     Directory and name of database"
+   echo "f     Path and filename of validated loci"
+   echo
+}
+
+#########################################################
+# PROGRAM						  #
+#########################################################
+
+while getopts ":H:d:f:p:" opt; do
+   case $opt in
+      H) # Help info
+         Help
+         exit;;
+      d) # Path and name of external database
+         DBPATH="$OPTARG";;
+      f) # Path and file of validated loci
+         FASTAPATH="$OPTARG";;
+      p) # Plasmid Type
+         PLASMID="$OPTARG";;
+      \?) #Invalid optionc
+      echo "Option does not exist"
+      exit;;
+   esac
+done
+
+mkdir ./$PLASMID/analysis
+
+echo indexing plasmid sequences
+echo
+
+blastdbcmd -db $DBPATH -entry_batch ./$PLASMID/fragments/plasmid_list > ./$PLASMID/analysis/POI.seq
+awk '/^>/ {printf("\n%s\n",$0);next; } { printf("%s",$0);}  END {printf("\n");}' < ./$PLASMID/analysis/POI.seq > ./$PLASMID/analysis/POI.1line
+awk 'BEGIN{RS=">"}{print $1"\t"$2;}' ./$PLASMID/analysis/POI.1line | tail -n+2 > ./$PLASMID/analysis/POI.tab
+awk 'BEGIN{FS=OFS="\t"} {$3 = length($2)}  {$2 = $2 $2} 1' ./$PLASMID/analysis/POI.tab > ./$PLASMID/analysis/ref.plasmid2x.tab
+awk '{print $1 "\t" $3}' ./$PLASMID/analysis/ref.plasmid2x.tab > ./$PLASMID/analysis/info.plasmid2x.tab
+awk 'BEGIN{FS=OFS="\t"} {$2 = $2 $2} 1' ./$PLASMID/analysis/POI.tab > ./$PLASMID/analysis/POI2x.tab
+awk -F '\t' -v OFS='\n' '{$1 = ">" $1} 1' ./$PLASMID/analysis/POI2x.tab > ./$PLASMID/analysis/POI2x.fasta
+makeblastdb -in ./$PLASMID/analysis/POI2x.fasta -dbtype nucl -hash_index -parse_seqids -out ./$PLASMID/analysis/db.plasmid2x
+
+rm ./$PLASMID/analysis/POI* 
+
+paste ./$PLASMID/fragments/plasmid_index ./$PLASMID/analysis/info.plasmid2x.tab > ./$PLASMID/analysis/plasmid_intermediate
+awk '{print $1 " " $2 "-" $2+$5 " " $3}' ./$PLASMID/analysis/plasmid_intermediate > ./$PLASMID/analysis/plasmid_index_coords
+blastdbcmd -db ./$PLASMID/analysis/db.plasmid2x -entry_batch ./$PLASMID/analysis/plasmid_index_coords > ./$PLASMID/analysis/indexed.seq
+sed 's/:.*//' ./$PLASMID/analysis/indexed.seq > ./$PLASMID/analysis/indexed.fasta
+
+rm ./$PLASMID/analysis/db.plasmid2x.*
+rm ./$PLASMID/analysis/indexed.seq
+rm ./$PLASMID/analysis/ref.plasmid2x.tab
+
+makeblastdb -in ./$PLASMID/analysis/indexed.fasta -dbtype nucl -hash_index -parse_seqids -out ./$PLASMID/analysis/db.indexed
+
+echo obtaining loci positions
+echo
+
+blastn -db ./$PLASMID/analysis/db.indexed -query $FASTAPATH -outfmt 6 > ./$PLASMID/analysis/indexed_val.hits
+
+echo searching for AMR elements
+echo
+
+amrfinder --nucleotide ./$PLASMID/analysis/indexed.fasta --plus --output ./$PLASMID/analysis/AMRFinder.hits --threads 8
+
+echo executing R script
+
+./R.step5 $PLASMID

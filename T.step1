@@ -1,0 +1,88 @@
+#!
+#########################################################
+# Help                                                  #
+#########################################################
+Help()
+{
+   # Display Help
+   echo "Add description of the script functions here."
+   echo
+   echo "Syntax: scriptTemplate [-g|h|v|V]"
+   echo "options:"
+   echo "H     Print this Help."
+   echo "G     Directory for GFF files (e.g. /home/username/PROGRAMS/Mod_Typing/GFF/)"
+   echo "P     Executable for piggy (e.g. /home/auxie/PROGRAMS/piggy/bin/piggy)"
+   echo
+}
+
+#########################################################
+# PROGRAM						  #
+#########################################################
+
+while getopts ":H:G:P:" opt; do
+   case $opt in
+      H) # Help info
+         Help
+         exit;;
+      G) # Directory for GFF Files
+         GFFINPUT="$OPTARG";;
+      P) # Piggy executable
+         PIGGYBIN="$OPTARG";;
+      \?) #Invalid option
+      echo "Option does not exist"
+      exit;;
+   esac
+done
+
+STARTDIR=$(pwd)
+
+mkdir roary
+echo "$GFFINPUT"
+roary -p 8 -o pan_coding_loci -f ./roary/ "$GFFINPUT"/*.gff
+
+# Navigate to roary folder, followed by the most recently modified folder
+cd roary
+cd "$(\ls -1dt ./*/ | head -n 1)"
+
+# Assign directory to a variable
+ROARYDIR=$(pwd)
+
+# copy the gene presence/absence data to the parent directory
+scp gene_presence_absence.csv ../gene.pam
+
+# Make a folder for piggy results and execute program
+mkdir piggy_out
+"$PIGGYBIN" --in_dir $GFFINPUT --out_dir ./piggy_out --roary_dir $ROARYDIR -t 8
+
+cd piggy_out
+scp IGR_presence_absence.csv ../../IGR.pam
+
+cd gff_files
+PIGGYGFF=$(pwd)
+
+cat *.modified > merged.modified
+# remove lines containing "Parent=" to remove duplicates
+grep -v Parent\= merged.modified > merged.gff
+scp merged.gff ../../../merged.gff
+grep -n \> merged.gff | awk '{print $1 + 1h}' > ../../../gff.sequence.lines
+grep -n -v \> merged.gff > gff.annot.position
+grep -v \# gff.annot.position > gff.annot.position.prep
+
+cat gff.annot.position.prep | while read field1 field2 field3 field4 field5 field6 field7 field8 field9; do POS=${field1%:*}; PRELT=${field9##*locus_tag=}; LOCUSTAG=${PRELT%%;*}; echo $POS$'\t'$LOCUSTAG$'\t'$field4$'\t'$field5$'\t'$field7; done > ../../../gff.annot.coord
+
+cd ../cluster_intergenic_alignment_files
+for FILE in *.fasta; do CLUSTER=${FILE%_aligned.fasta}; COUNTED="$(grep \> $FILE | wc -l)"; awk -v CLUSTER=$CLUSTER -v COUNTED=$COUNTED '{print CLUSTER " " COUNTED}' $FILE; done > ../../../IG.index
+PIGGYDIR=$(pwd)
+
+cd $STARTDIR
+
+cd roary
+
+# Some versions of the pangenomic programs introduce (-) and (+) strings that need to be removed
+awk '{gsub("\\(-\\)","",$0); print $0}' gene.pam | awk '{gsub("\\(\\+\\)","",$0); print $0}' > gene.pam1
+
+cd $STARTDIR
+
+./R.step1a $PIGGYDIR
+
+

@@ -1,0 +1,189 @@
+#!/usr/bin/env Rscript
+library("optparse")
+
+### BELOW IS CODE FROM  https://www.r-bloggers.com/2015/09/passing-arguments-to-an-r-script-from-command-lines/ #
+option_list = list(
+  make_option(c("-m", "--metadata"), type="character", default=NULL, 
+              help="metadata file name", metavar="character"),
+  make_option(c("-i", "--within_G"), type="numeric", default=NULL, 
+              help="minimum within-group prevalence", metavar="numeric"),
+  make_option(c("-o", "--without_G"), type="numeric", default=NULL, 
+              help="maximum outside-of-group prevalence", metavar="numeric"),
+  make_option(c("-p", "--plasmid"), type="character", default=NULL, 
+              help="plasmid type to evaluate", metavar="character")
+); 
+ 
+opt_parser = OptionParser(option_list=option_list);
+opt = parse_args(opt_parser);
+
+# if (is.null(opt$file)){
+#   print_help(opt_parser)
+#   stop("At least one argument must be supplied (input file).n", call.=FALSE)
+# }
+### END OF BORROWED CODE ###
+
+
+library(DECIPHER)
+
+### Add line to load Step1.RData ###
+load("./roary/Step1.Rdata") 
+
+# Edit 6-4-2022
+system(paste0("mkdir ", opt$plasmid))
+system(paste0("mkdir ",opt$plasmid,"/unvalidated"))
+
+# The imported variable mx.loci.bin is a filtered dataset
+# If a plasmid only contained loci that occured fewer than three times in the entire dataset, that plasmid would be excluded
+# This may cause a mismatch in dimensions when referencing the metadata file
+# Also, if a plasmid was unassigned a plasmid type but still retained loci, this would also result in a mismatch
+
+
+selected.plasmid <- opt$plasmid
+withinmin <- opt$within_G
+withoutmax <- opt$without_G
+
+plasmid.meta <- read.csv(paste(getwd(), opt$metadata, sep = "/"), header = TRUE)
+df.plasmid.meta <- as.data.frame(plasmid.meta[,-1])
+rownames(df.plasmid.meta) <- plasmid.meta[,1]
+
+meta.list <- list(rownames(df.plasmid.meta))
+names(meta.list) <- meta.list
+
+df.plasmid.meta.an <- df.plasmid.meta
+
+# plasmid.meta.temp <- as.data.frame(matrix(0, ncol = ncol(mx.loci.bin), nrow = nrow(df.plasmid.meta.an)))
+# colnames(plasmid.meta.temp) <- colnames(mx.loci.bin)
+
+df.plasmid.meta.an[which(df.plasmid.meta.an != 0, arr.ind = TRUE)] <- "black"
+df.plasmid.meta.an[which(df.plasmid.meta.an == 0, arr.ind = TRUE)] <- "white"
+
+# Divide the dataset into plasmids that are/are not members of the group of interest
+# within.set <- as.matrix(mx.loci.bin[,colnames(df.plasmid.meta)[which(df.plasmid.meta[selected.plasmid,] != 0, arr.ind = TRUE)[,2]]])
+# without.set <- as.matrix(mx.loci.bin[,colnames(df.plasmid.meta)[which(df.plasmid.meta[selected.plasmid,] == 0, arr.ind = TRUE)[,2]]])
+
+within.set <- mx.loci.bin[,colnames(df.plasmid.meta[,which(df.plasmid.meta[selected.plasmid,] != 0)])]
+without.set <- mx.loci.bin[,which(colnames(mx.loci.bin) %in% colnames(within.set) != TRUE, arr.ind = TRUE)]
+ 
+  # Prepare the dataframe
+  df.vals <- as.data.frame(matrix(0, nrow = nrow(within.set), ncol = 2))
+  rownames(df.vals) <- rownames(within.set)
+  
+  # Obtain the prevalence of each loci within/without the group (remembering to account for groups where n=1)
+  ifelse(ncol(within.set) > 1, df.vals[,1] <- apply(within.set,1,mean), df.vals[,1] <- as.numeric(within.set[,1]))
+  df.vals[,2] <- apply(without.set,1,mean)
+  
+  # Create the prevalence plot, using slider values for the abline
+ # loci_plot <- plot(df.vals[,2], df.vals[,1], xlim = c(0,1), ylim = c(0,1), main = paste(plasmid, " n=", ncol(within.set), sep = ""),xlab = "Frequency Outside Group", ylab = "Frequency Within Group", abline(v = without_G, h = within_G, col = 2))
+  
+  # Subset out the loci that meet selection criterea, as dictated by the slider values
+  p1 <- df.vals[which(df.vals[,1] >= withinmin , arr.ind = TRUE),]
+  p2 <- p1[which(p1[,2] <= withoutmax , arr.ind = TRUE),]
+  
+  # length(p2)
+  # p2
+  paste0(nrow(p2), " loci meet selection parameters")
+
+png(file = paste0("./",selected.plasmid,"/",selected.plasmid,"_unvalidated_prevalence_plot.png"), width = 1800, height = 1800, res = 300)
+plot(df.vals[,2], df.vals[,1], xlim = c(0,1), ylim = c(0,1), main = paste(opt$plasmid, " n=", ncol(within.set), sep = ""),xlab = "Frequency Outside Group", ylab = "Frequency Within Group", abline(v = opt$without_G, h = opt$within_G, col = 2))
+mtext(paste0(nrow(p2), " loci meet selection parameters"), side = 3, cex=0.8)
+dev.off()  
+
+
+# rownames(plasmid.meta.temp) <- rownames(df.plasmid.meta.an)
+
+plasmid.meta.temp <- as.data.frame(matrix(0, ncol = ncol(mx.loci.bin), nrow = nrow(df.plasmid.meta)))
+colnames(plasmid.meta.temp) <- colnames(mx.loci.bin)
+rownames(plasmid.meta.temp) <- rownames(df.plasmid.meta)
+plasmid.meta.temp[which(plasmid.meta.temp == 0, arr.ind = TRUE)] <- as.character("white")
+for(i in 1:ncol(plasmid.meta.temp)){
+if(colnames(plasmid.meta.temp)[i] %in% colnames(df.plasmid.meta.an) == TRUE){
+plasmid.meta.temp[,i] <- df.plasmid.meta.an[,which(colnames(df.plasmid.meta.an) == colnames(plasmid.meta.temp)[i], arr.ind = TRUE)]
+} else {
+tempX <- 0
+}
+}
+
+# dist.loci.bin <- dist(mx.loci.bin, method = "binary")
+# dist.t.loci.bin <- dist(t(mx.loci.bin), method = "binary")
+# hclust.loci.bin <- hclust(dist.loci.bin)
+# hclust.t.loci.bin <- hclust(dist.t.loci.bin)
+
+
+# heatmap(mx.loci.bin, Colv = as.dendrogram(hlcust.t.loci.bin), Rowv = as.dendrogram(hclust.loci.bin), scale = "none")
+
+dend.color.bars <- plasmid.meta.temp[selected.plasmid,]
+png(file = paste0("./",selected.plasmid,"/",selected.plasmid,"_Loci_highlight_PAM.png"), width = 3600, height = 3600, res = 300)
+heatmap(mx.loci.bin, Colv = as.dendrogram(hclust.t.loci.bin), Rowv = as.dendrogram(hclust.loci.bin), scale = "none", main = paste0("Presence/Absence Matrix of Loci, group highlighted: ", selected.plasmid), ylab = "Loci", ColSideColors = as.character(dend.color.bars))
+dev.off()
+  
+
+
+
+# for(i in 1:ncol(df.plasmid.meta.an)){
+# plasmid.meta.temp[,match(colnames(df.plasmid.meta.an)[i], colnames(plasmid.meta.temp))] <- df.plasmid.meta.an[,colnames(df.plasmid.meta.an)[i]]
+# }
+  
+  
+# Generate a string of the loci of interest and obtain the current loci count
+loci.of.interest <- paste((rownames(p2[which(p2[,1] > 0),])), collapse = ", ") 
+num.loci.of.interest <- length(rownames(p2[which(p2[,1] > 0),]))
+loci.for.validation <- rownames(p2[which(p2[,1] > 0),])
+common.for.validation <- df.name.key[loci.for.validation,1]
+IG.for.validation <- loci.for.validation[which(loci.for.validation %in% IGindex[,1] == TRUE, arr.ind = TRUE)]
+
+coding.coords1 <- df.annot.coords1[match(common.for.validation, df.annot.coords1[,2]),]
+  coding.coords1 <- na.omit(coding.coords1)
+  coding.coords1[,2] <- as.character(coding.coords1[,2])
+  coding.coords1[,5] <- as.character(coding.coords1[,5])
+  coding.coords.2 <- matrix(0, ncol = 1, nrow = nrow(coding.coords1))
+  
+  for(i in 1:nrow(coding.coords.2)){
+    coding.coords.2[i,1] <- paste(as.character(coding.coords1[i,]), collapse = " ")
+  }
+  
+  rev.coding.coords <- coding.coords.2[which(coding.coords1[,5] == "-", arr.ind = TRUE),1]
+  fwd.coding.coords <- coding.coords.2[which(coding.coords1[,5] == "+", arr.ind = TRUE),1]
+
+  writeLines(as.character(rev.coding.coords), con = paste0("./",selected.plasmid,"/unvalidated/rev.coding.coords"))
+  writeLines(as.character(fwd.coding.coords), con = paste0("./",selected.plasmid,"/unvalidated/fwd.coding.coords"))
+  
+  set.IGindex <- IG.for.validation
+  
+  ###
+  
+  # Escape for no intergenic regions
+if(length(IG.for.validation) != 0){  
+
+  set.IGindex <- IG.for.validation
+  
+  
+  for(j in 1:1){
+  writeout.IG.seq <- as.data.frame(matrix(0, ncol = 1, nrow = 2 * length(set.IGindex)))
+  for(i in 1:length(set.IGindex)){ 
+   
+    v.cluster <- paste(piggy.dir,"/",as.character(set.IGindex[i]), "_aligned.fasta", sep = "")
+    dna <- readDNAStringSet(v.cluster)
+    dna <- RemoveGaps(dna, removeGaps = "all")
+    DNA <- AlignSeqs(dna)
+    consensus.result <- as.data.frame(ConsensusSequence(DNA))
+    writeout.IG.seq[(i*2)-1,1] <- paste(">", set.IGindex[i], sep = "")
+    writeout.IG.seq[(i*2),1] <- consensus.result[1,1]
+    writeout.IG.seq1 <- writeout.IG.seq
+  }
+  }
+
+
+  writeLines(as.character(writeout.IG.seq1[,1]), con = paste0("./",selected.plasmid,"/unvalidated/intergenic.fasta"))
+  } else {
+  writeLines(as.character(" "), con = paste0("./",selected.plasmid,"/unvalidated/intergenic.fasta"))
+  }
+  
+  ###
+  
+  
+system(paste0("mkdir ./",selected.plasmid,"/data"))
+save.image(paste0("./",selected.plasmid,"/data/Step2.Rdata"))
+  
+
+
+

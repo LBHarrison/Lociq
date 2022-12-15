@@ -1,0 +1,75 @@
+#!/usr/bin/env Rscript
+args = commandArgs(trailingOnly=TRUE)
+piggy.dir <- args[1]
+
+library(DECIPHER)
+
+# gene <- read.csv(paste(getwd(), "/roary/", "gene.pam", sep = ""))
+# IGR <- read.csv(paste(getwd(), "/roary/", "IGR.pam", sep = ""))
+gene <- read.csv(paste(getwd(), "/roary/", "gene.pam1", sep = ""), stringsAsFactors = FALSE)
+IGR <- read.csv(paste(getwd(), "/roary/", "IGR.pam", sep = ""), stringsAsFactors = FALSE)
+coord <- read.csv(paste(getwd(), "/roary/", "gff.annot.coord", sep = ""), header = FALSE, sep = "\t")
+nex.coord <- read.csv(paste(getwd(), "/roary/", "gff.sequence.lines", sep = ""), header = FALSE)
+IGindex <- read.csv(paste(getwd(), "/roary/", "IG.index", sep = ""), header = FALSE, sep = " ")
+IGindex <- unique(IGindex)
+
+df.annot.coords1 <- cbind(coord, matrix(0, ncol = 2, nrow = dim(coord)[1]))
+colnames(df.annot.coords1) <- c("line start", "locus", "start", "end", "strand", "length", "line_ref")
+df.annot.coords1$length <- (df.annot.coords1$end - df.annot.coords1$start)+1
+for(i in 1:dim(df.annot.coords1)[1]){df.annot.coords1[i,7] <- nex.coord[which(abs(nex.coord - df.annot.coords1[i,1] > 0) == min(abs(nex.coord - df.annot.coords1[i,1]) > 0))[1],]}
+df.annot.coords1 <- as.data.frame(df.annot.coords1, stringsAsFactors = FALSE)
+
+
+df.gene <- gene[,c(-2:-14)]
+df.IGR <- IGR[,c(-2:-14)]
+
+df.gene <- df.gene[,c(1,(order(as.character(colnames(df.gene)[-1])))+1)]
+df.IGR <- df.IGR[,c(1,(order(as.character(colnames(df.IGR)[-1])))+1)]
+
+df.loci.init <- as.data.frame(rbind(df.gene, df.IGR))
+
+# df.loci.init[dim(df.loci.init)[1]+1,] <- rep("",dim(df.loci.init)[2])
+df.loci.init[which(df.loci.init == "", arr.ind = TRUE)] <- NA
+
+df.loci.init[,dim(df.loci.init)[2]+1] <- rep(0,dim(df.loci.init)[1])
+for(i in 1:dim(df.loci.init)[1]){df.loci.init[i,dim(df.loci.init)[2]] <- length(which(is.na(df.loci.init[i,-1]) == FALSE, arr.ind = TRUE)[,1])}
+
+
+# PARAMETER 1: CUTOFF FOR FILTERING LOW-INSTANCE LOCI FROM ANALYSIS OF FULL DATASET
+P1 <- 3
+
+df.loci.filter <- df.loci.init[-(which(df.loci.init[,dim(df.loci.init)[2]] < P1, arr.ind = TRUE)),]
+
+# df.loci.filter <- df.loci.init
+
+rownames(df.loci.filter) <- as.character(df.loci.filter[,1])
+df.loci.filter <- df.loci.filter[,-1]
+
+# Reconcile the human-readable names to the common naming scheme names
+df.name.key <- as.data.frame(matrix(0, nrow = nrow(df.loci.filter), ncol = 1))
+for(i in 1:nrow(df.name.key)){df.name.key[i,1] <- as.character(df.loci.filter[i,which(is.na(df.loci.filter[i,]) != TRUE)[1]])}
+rownames(df.name.key) <- rownames(df.loci.filter)
+
+# df.loci.bin <- as.matrix(df.loci.filter)
+df.loci.bin <- as.data.frame(df.loci.filter)
+df.loci.bin[which(is.na(df.loci.bin) == FALSE, arr.ind = TRUE)] <- 1
+df.loci.bin[which(is.na(df.loci.bin) == TRUE, arr.ind = TRUE)] <- 0
+
+mx.loci.bin <- apply(df.loci.bin, 2, function(x) as.numeric(as.character(x)))
+colnames(mx.loci.bin) <- colnames(df.loci.bin)
+rownames(mx.loci.bin) <- rownames(df.loci.bin)
+mx.loci.bin <- mx.loci.bin[,-(ncol(mx.loci.bin))]
+mx.loci.full <- mx.loci.bin
+mx.loci.bin <- mx.loci.bin[,which(colSums(mx.loci.bin) != 0, arr.ind = TRUE)]
+
+dist.loci.bin <- dist(mx.loci.bin, method = "binary")
+dist.t.loci.bin <- dist(t(mx.loci.bin), method = "binary")
+hclust.loci.bin <- hclust(dist.loci.bin)
+hclust.t.loci.bin <- hclust(dist.t.loci.bin)
+
+png(file = "Loci_PAM.png", width = 3600, height = 3600, res = 300)
+heatmap(mx.loci.bin, Colv = as.dendrogram(hclust.t.loci.bin), Rowv = as.dendrogram(hclust.loci.bin), scale = "none", main = "Presence/Absence Matrix of Loci", ylab = "Loci")
+dev.off()
+
+
+save.image("./roary/Step1.Rdata")

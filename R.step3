@@ -1,0 +1,102 @@
+#!/usr/bin/env Rscript
+system("echo starting R script")
+args = commandArgs(trailingOnly=TRUE)
+# INPUT ./R.Step3 $EXDBMET $MINWITHIN $MAXWITHOUT
+v.meta.file <- args[1]
+v.withinmin  <- args[2]
+v.withoutmax <- args[3]
+selected.plasmid <- args[4]
+
+# Resume previous session
+load(paste0("./",selected.plasmid,"/data/Step2.Rdata"))
+
+# Load Metadata File
+    plsdb_naming3 <- read.csv(paste(v.meta.file))
+    df.meta.matrix <- as.data.frame(plsdb_naming3[,-1])
+    rownames(df.meta.matrix) <- plsdb_naming3[,1]
+  # str(df.meta.matrix)
+  
+  #  n.POI <- length(which(plsdb_naming3[,which(colnames(plsdb_naming3) == selected.plasmid, arr.ind=TRUE)] != 0, arr.ind = TRUE))
+  n.POI <- sum(as.numeric(df.meta.matrix[selected.plasmid,]))
+  # Load BLAST hits from reference database
+    validation <- read.delim(paste0("./",selected.plasmid,"/validated/validation.hits"), header=FALSE)
+    validation.hits <- as.data.frame(validation)
+    df.validation.spec <- as.data.frame.matrix(table(validation.hits[,2], validation.hits[,1]))
+    
+    within.validation.set <- df.validation.spec[which(rownames(df.validation.spec) %in% colnames(df.meta.matrix)[which(df.meta.matrix[selected.plasmid,] != 0, arr.ind = TRUE)[,2]] == TRUE, arr.ind = TRUE),]
+    without.validation.set <- df.validation.spec[which(rownames(df.validation.spec) %in% colnames(df.meta.matrix)[which(df.meta.matrix[selected.plasmid,] == 0, arr.ind = TRUE)[,2]] == TRUE, arr.ind = TRUE),]
+  
+  # Account for multiple BLAST hits on a single plasmid (e.g. overlapping IncF's) and change all non-zero values to 1
+    within.validation.set[within.validation.set != 0] <- 1
+    without.validation.set[without.validation.set != 0] <- 1
+  
+  # Create a space for results
+    ext.val <- matrix(0, nrow = ncol(within.validation.set), ncol = 2)
+    colnames(ext.val) <- c("Within Set", "Without Set")
+    rownames(ext.val) <- colnames(within.validation.set)
+  
+  # Populate the results by dividing the column sums by the number of rows in each table (i.e. find prevalence for each loci)
+
+    ext.val[,1] <- apply(within.validation.set, 2, function(x) sum(x)/nrow(within.validation.set))
+    ext.val[,2] <- apply(without.validation.set, 2, function(x) sum(x)/(ncol(df.meta.matrix) - nrow(without.validation.set)))
+
+   png(file = paste0("./",selected.plasmid,"/",selected.plasmid,"_prevalence_plot_no_thresholds.png"), width = 1800, height = 1800, res = 300)
+   plot(ext.val[,2], ext.val[,1], xlim=c(0,1), ylim=c(0,1), xlab = "Prevalence Outside Group", ylab = "Prevalence Within Group", main = paste0("Validation Plot for ", selected.plasmid, " ", Sys.time()))
+   dev.off()  
+
+
+system("echo before assigning P3")
+    p3 <- ext.val[which(ext.val[,1] >= as.numeric(v.withinmin) , arr.ind = TRUE),]
+    if(is.null(dim(ext.val[which(ext.val[,1] >= as.numeric(v.withinmin) , arr.ind = TRUE),])) != TRUE){
+    p3 <- ext.val[which(ext.val[,1] >= as.numeric(v.withinmin) , arr.ind = TRUE),]
+    p4 <- p3[which(p3[,2] <= as.numeric(v.withoutmax) , arr.ind = TRUE),]
+    
+
+    if(is.null(dim(p3)) == TRUE){
+    val.loci.count <- 0
+    paste("No loci meet selection criteria")
+    } else {
+    if(is.null(dim(p4)) != TRUE){
+    val.loci <- paste((rownames(p4[which(p4[,1] > 0),])), collapse = ", ")
+    val.loci.count <- nrow(p4)
+    writeLines(rownames(p4[which(p4[,1] > 0),]), con = paste0("./",selected.plasmid,"/validated/validated_loci.ID")) 
+    system(paste0("grep -A 1 -f ./", selected.plasmid,"/validated/validated_loci.ID ./",selected.plasmid,"/unvalidated/unvalidated_loci.fasta > ", "./", selected.plasmid,"/validated/", selected.plasmid, "_validated.fasta"))
+    system("echo validated loci fasta generated")
+    system(paste0("echo ", val.loci.count, " loci passed validation parameters"))
+    } else {
+    if(is.na(p4[1]) != TRUE){
+    val.loci.count <- 1
+    val.loci <- names(which(p3[,2] <= as.numeric(v.withoutmax) , arr.ind = TRUE))
+    writeLines(val.loci, con = paste0("validated_loci.ID"))
+    system(paste0("grep -A 1 -f validated_loci.ID unvalidated_loci.fasta > ","./validated/", selected.plasmid, "_validated.fasta"))
+    system("echo validated loci fasta generated")
+    system(paste0("echo ", val.loci.count, " loci passed validation parameters"))
+    } else {
+    val.loci.count <- 0
+    paste("No loci meet selection criteria")
+    }
+    }
+    } 
+    } else {
+    if(is.na(p3)[1] != TRUE){
+    val.loci.count <- 1
+    val.loci <- names(which(ext.val[,1] >= as.numeric(v.withinmin) , arr.ind = TRUE))
+    writeLines(val.loci, con = paste0("validated_loci.ID"))
+    system(paste0("grep -A 1 -f validated_loci.ID unvalidated_loci.fasta > ","./validated/", selected.plasmid, "_validated.fasta"))
+    system("echo validated loci fasta generated")
+    system(paste0("echo ", val.loci.count, " loci passed validation parameters"))
+    } else {
+        val.loci.count <- 0
+    }
+    }
+    
+ 
+# Wrap the results into a list output that can be called upon later
+
+   png(file = paste0("./",selected.plasmid,"/",selected.plasmid,"_validated_prevalence_plot.png"), width = 1800, height = 1800, res = 300)
+   plot(ext.val[,2], ext.val[,1], xlim=c(0,1), ylim=c(0,1), xlab = "Prevalence Outside Group", ylab = "Prevalence Within Group", main = paste0("Validation Plot for ", selected.plasmid, " ", Sys.time()), abline(v = v.withoutmax, h = v.withinmin, col = 2))
+   mtext(paste0(val.loci.count, " loci meet validation parameters"), side = 3, cex=0.8)
+   mtext(paste0(n.POI, " ", selected.plasmid, " in database"), side = 3, line = 0.6, cex = 0.8)
+   dev.off()  
+
+    save.image(paste0("./",selected.plasmid,"/data/Step3.Rdata"))

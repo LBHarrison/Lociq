@@ -1,0 +1,81 @@
+#!
+#########################################################
+# Help                                                  #
+#########################################################
+Help()
+{
+   # Display Help
+   echo "Add description of the script functions here."
+   echo
+   echo "Syntax: scriptTemplate [-H|d|p|f]"
+   echo "options:"
+   echo "H     Print this Help."
+   echo "n     Name of directory to be created"
+   echo "p     Plasmid type to evaluate"
+   echo "i     Input fasta file for analysis"
+   echo
+}
+
+#########################################################
+# PROGRAM						    #
+#########################################################
+
+while getopts ":H:n:p:i:" opt; do
+   case $opt in
+      H) # Help info
+         Help
+         exit;;
+      n) # Name of directory to be created
+         NAME="$OPTARG";;
+      p) # Plasmid type
+         PLASMID="$OPTARG";;
+      i) # Input file
+         INPUT="$OPTARG";;
+      \?) #Invalid optionc
+      echo "Option does not exist"
+      exit;;
+   esac
+done
+
+
+mkdir $NAME
+
+mkdir ./$NAME/analysis
+mkdir ./$NAME/data
+
+makeblastdb -dbtype nucl -parse_seqids -in $INPUT -out ./$NAME/newseq
+
+blastn -db ./$NAME/newseq -query ./$PLASMID/validated/$PLASMID\_validated\.fasta -outfmt 6 > ./$NAME/newseq.loci
+
+./R.finder.v2 $NAME $PLASMID
+
+echo indexing plasmid sequences
+echo
+
+blastdbcmd -db ./$NAME/newseq -entry_batch ./$NAME/plasmid_list > ./$NAME/analysis/POI.seq
+
+awk '/^>/ {printf("\n%s\n",$0);next; } { printf("%s",$0);}  END {printf("\n");}' < ./$NAME/analysis/POI.seq > ./$NAME/analysis/POI.1line
+awk 'BEGIN{RS=">"}{print $1"\t"$2;}' ./$NAME/analysis/POI.1line | tail -n+2 > ./$NAME/analysis/POI.tab
+awk 'BEGIN{FS=OFS="\t"} {$3 = length($2)}  {$2 = $2 $2} 1' ./$NAME/analysis/POI.tab > ./$NAME/analysis/ref.plasmid2x.tab
+awk '{print $1 "\t" $3}' ./$NAME/analysis/ref.plasmid2x.tab > ./$NAME/analysis/info.plasmid2x.tab
+awk 'BEGIN{FS=OFS="\t"} {$2 = $2 $2} 1' ./$NAME/analysis/POI.tab > ./$NAME/analysis/POI2x.tab
+awk -F '\t' -v OFS='\n' '{$1 = ">" $1} 1' ./$NAME/analysis/POI2x.tab > ./$NAME/analysis/POI2x.fasta
+
+makeblastdb -in ./$NAME/analysis/POI2x.fasta -dbtype nucl -parse_seqids -out ./$NAME/analysis/db.plasmid2x
+
+paste ./$NAME/plasmid_index ./$NAME/analysis/info.plasmid2x.tab > ./$NAME/analysis/plasmid_intermediate
+
+awk '{print $1 " " $2 "-" $2+$5 " " $3}' ./$NAME/analysis/plasmid_intermediate > ./$NAME/analysis/plasmid_index_coords
+
+blastdbcmd -db ./$NAME/analysis/db.plasmid2x -entry_batch ./$NAME/analysis/plasmid_index_coords > ./$NAME/analysis/indexed.seq
+
+sed 's/:.*//' ./$NAME/analysis/indexed.seq > ./$NAME/analysis/indexed.fasta
+
+makeblastdb -in ./$NAME/analysis/indexed.fasta -dbtype nucl -parse_seqids -out ./$NAME/analysis/db.indexed
+
+blastn -db ./$NAME/analysis/db.indexed -query ./$PLASMID/validated/$PLASMID\_validated\.fasta -outfmt 6 > ./$NAME/analysis/indexed_val.hits
+
+amrfinder --nucleotide ./$NAME/analysis/indexed.fasta --plus --output ./$NAME/analysis/AMRFinder.hits --threads 8
+
+./R.grouper $PLASMID $NAME
+

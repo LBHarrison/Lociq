@@ -1,0 +1,665 @@
+#!/usr/bin/env Rscript
+
+args = commandArgs(trailingOnly=TRUE)
+selected.plasmid <- as.character(args)[1]
+project.name <- as.character(args)[2]
+write(project.name, "./project")
+
+# check for previous results or load the original output
+if(file.exists(paste0("./",selected.plasmid,"/data/Step6.Rdata")) == TRUE){
+	load(paste0("./",selected.plasmid,"/data/Step6.Rdata")) 
+	version <- 2
+	} else {
+	load(paste0("./",selected.plasmid,"/data/Step5.Rdata")) 
+	version <- 1
+	}
+
+
+project.name <- read.table(file= "./project", header = F, nrows = 1)[1,1]
+
+analysis_val <- read.delim(paste0("./",project.name,"/analysis/indexed_val.hits"), header=FALSE)
+df.analysis.hits <- as.data.frame(analysis_val)
+df.analysis.hits[,13] <- rep(0, nrow(df.analysis.hits))
+colnames(df.analysis.hits) <- colnames(df.dataset.hits)
+colnames(df.analysis.hits)[1:2] <- c("loci", "plasmid")
+df.analysis.hits[which(df.analysis.hits$`sequence.start` < df.analysis.hits$`sequence.end`),13] <- 'plus'
+df.analysis.hits[which(df.analysis.hits$`sequence.start` > df.analysis.hits$`sequence.end`),13] <- 'minus'
+analysis.coords <- as.data.frame(paste(df.analysis.hits[,2], paste(with(df.analysis.hits,pmin(sequence.start, sequence.end)),with(df.analysis.hits,pmax(sequence.start, sequence.end)), sep = "-"), df.analysis.hits[,13], sep = " "))
+df.analysis.hits[,6] <- paste(df.analysis.hits[,2], df.analysis.hits[,1], sep = "_")
+
+for(i in 1:length(levels(factor(df.analysis.hits[,1])))){
+
+loci.iteration <- levels(factor(df.analysis.hits[,1]))[i]
+
+loci.temp <- as.data.frame(subset(analysis.coords[,1], df.analysis.hits[,1] == loci.iteration))
+
+write.table(as.character(loci.temp[,1]), paste0("./",project.name,"/analysis/batcher"), sep = "\t", col.name = FALSE, row.name = FALSE, quote = FALSE)
+
+system(paste0("./lociq.script -a ./",project.name,"/analysis/"), wait = TRUE)
+
+seqs.4 <- read.delim(paste0("./",project.name,"/analysis/seqs.4.R"), header=FALSE)
+
+seqs.4[,3] <- as.numeric(factor(seqs.4[,2]))
+
+system(paste0("rm ./",project.name,"/analysis/seqs.4.R"))
+
+seqs.4[,4] <- as.numeric(nchar(as.character(seqs.4[,2])))
+
+seqs.4[,5] <- paste(seqs.4[,1], loci.iteration, sep = "_")
+seqs.4[,6] <- loci.iteration
+colnames(seqs.4)[] <- c("plasmid","sequence","loci.variant","loci.length","unique","loci")
+seqs.4[,1] <- as.character(seqs.4[,1])
+seqs.4[,2] <- as.character(seqs.4[,2])
+# Merge the datasets to create loci/plasmid/variant combinations
+# A quick decision tree loop based on whether this is the first iteration or not
+k <- 0
+ifelse(i == 1, seq.list <- seqs.4, seq.list <- rbind(seq.list, seqs.4))
+}
+
+df.merge.analysis <- merge(df.analysis.hits, seq.list, by = c('unique', 'plasmid', 'loci'), all = TRUE)
+df.merge.analysis[,17] <- abs(df.merge.analysis[,10] - df.merge.analysis[,9]) + 1
+df.merge.analysis <- df.merge.analysis[which(df.merge.analysis[,17] == df.merge.analysis$loci.length, arr.ind = TRUE),1:16]
+
+for(i in 1:nrow(df.merge.analysis)){
+if(is.na(match(df.merge.analysis[i,14], df.merge.indexed[,14])) == TRUE){
+df.merge.analysis[i,15] <- 0
+} else {
+df.merge.analysis[i,15] <- df.merge.indexed[match(df.merge.analysis[i,14], df.merge.indexed[,14]),15]
+}
+}
+
+df.new.analysis <- df.merge.analysis[which(df.merge.analysis[,15] == 0, arr.ind = TRUE),]
+
+if(nrow(df.new.analysis) != 0){
+for(i in 1:length(levels(factor(df.new.analysis$loci)))){
+current.typing.locus <- subset(df.new.analysis, df.new.analysis$loci == levels(factor(df.new.analysis$loci))[i])
+current.typing.locus[,15] <- as.numeric(factor(current.typing.locus[,14]))
+current.typing.locus[,15] <- current.typing.locus[,15] +  max(as.numeric(subset(df.merge.indexed, df.merge.indexed$loci == levels(factor(df.new.analysis$loci))[i])[,15]))
+df.new.analysis <- rbind(df.new.analysis, current.typing.locus)
+}
+
+df.new.analysis <- df.new.analysis[(-(which(df.new.analysis[,15] == 0))),]
+df.merge.analysis <- df.merge.analysis[(-(which(df.merge.analysis[,15] == 0))),]
+df.merge.analysis <- rbind(df.merge.analysis, df.new.analysis)
+} else {
+x <- 1
+}
+
+df.merge.analysis <- rbind(df.merge.analysis, df.new.analysis)
+
+df.merge.indexed <- rbind(df.merge.indexed, df.merge.analysis)
+
+new.analysis.loci <- df.merge.indexed[which(df.merge.indexed$plasmid %in% unique(df.merge.analysis$plasmid) == TRUE, arr.ind = TRUE),]
+
+loci.variability <- as.data.frame.matrix(table(df.merge.indexed$loci, df.merge.indexed$loci.variant))
+
+loci.new.complete <- new.analysis.loci[,c(2,14,3,9,10,15,16,13)]
+
+loci.new.complete[,9] <- rep(0, nrow(loci.new.complete))
+colnames(loci.new.complete)[9] <- "fragment"
+
+loci.new.complete <- unique(loci.new.complete)
+loci.complete <- rbind(loci.complete, loci.new.complete)
+
+library(tidyr)
+
+loci_fragment <- read.csv(paste0("./",selected.plasmid,"/fragments/loci.index"), stringsAsFactors=FALSE)
+for(i in 1:nrow(loci_fragment)){loci.new.complete[which(loci.new.complete$loci == loci_fragment[i,1], arr.ind = TRUE),9] <- loci_fragment[i,2]}
+
+df.plasmid.fragment.order <- as.data.frame(matrix(0, ncol = max(table(loci.new.complete[,1])), nrow = length(levels(factor(loci.new.complete[,1])))))
+df.plasmid.loci.order <- as.data.frame(matrix(0, ncol = max(table(loci.new.complete[,1])), nrow = length(levels(factor(loci.new.complete[,1])))))
+
+for(i in 1:length(levels(factor(loci.new.complete[,1])))){
+     current.plasmid.fragments <- subset(loci.new.complete, loci.new.complete[,1] == levels(factor(loci.new.complete[,1]))[i])[order(subset(loci.new.complete, loci.new.complete[,1] == levels(factor(loci.new.complete[,1]))[i])[,4]),9]
+df.plasmid.fragment.order[i,1:length(current.plasmid.fragments)] <- current.plasmid.fragments
+rownames(df.plasmid.fragment.order)[i] <- levels(factor(loci.new.complete[,1]))[i]
+ }
+
+for(i in 1:length(levels(factor(loci.new.complete[,1])))){
+    current.plasmid.loci <- subset(loci.new.complete, loci.new.complete[,1] == levels(factor(loci.new.complete[,1]))[i])[order(subset(loci.new.complete, loci.new.complete[,1] == levels(factor(loci.new.complete[,1]))[i])[,4]),3]
+    ifelse(length(current.plasmid.loci) > 1, df.plasmid.loci.order[i,1:length(current.plasmid.loci)] <- current.plasmid.loci, df.plasmid.loci.order[i,1] <- as.character(current.plasmid.loci))
+    rownames(df.plasmid.loci.order)[i] <- levels(factor(loci.new.complete[,1]))[i]
+}
+
+df.plasmid.loci.order.num <- df.plasmid.loci.order
+for(i in 1:nrow(df.loci.ind)){df.plasmid.loci.order.num[which(df.plasmid.loci.order.num == rownames(df.loci.ind)[i], arr.ind = TRUE)] <- i}
+
+df.condense.frag.order <- as.data.frame(matrix(0, ncol = (2*nrow(loci_fragment)), nrow = nrow(df.plasmid.fragment.order)))
+
+for(i in 1:dim(df.plasmid.fragment.order)[1]){
+    current.frag.order <- c(as.character(rle(df.plasmid.fragment.order[i,])$values))
+    df.condense.frag.order[i,1:length(current.frag.order)] <- current.frag.order
+}
+
+df.condense.frag.order[] <- lapply(df.condense.frag.order, function(x) as.numeric(as.character(x)))
+
+df.condense.frag.order <- df.condense.frag.order[,which(colSums(df.condense.frag.order) != 0, arr.ind = TRUE)]
+
+df.condense.frag.order[,ncol(df.condense.frag.order)+1] <- as.numeric(factor(as.data.frame(unite(df.condense.frag.order, "united", sep = " "))[,1]))
+
+rownames(df.condense.frag.order)[] <- rownames(df.plasmid.fragment.order)
+
+indexed_AMR <- read.delim(paste0("./",project.name,"/analysis/AMRFinder.hits"), stringsAsFactors=FALSE)
+colnames(indexed_AMR)[c(2,3,4,5,6,9)] <- c("plasmid", "sequence.start", "sequence.end", "orientation", "loci", "loci.variant")
+
+plasmid.loci.amr <- rbind(indexed_AMR[,c(2, 3, 4, 5, 6, 9)], loci.new.complete[,c(1, 4, 5, 8, 3, 6)])
+plasmid.AMR <- indexed_AMR[,c(2, 3, 4, 5, 6, 9)]
+
+loci.amr.map <- as.data.frame(matrix(0, nrow = length(table(plasmid.loci.amr[,1])), ncol = max(table(plasmid.loci.amr[,1]))))
+
+for(i in 1:length(table(plasmid.loci.amr[,1]))){
+current.map <- subset(plasmid.loci.amr, plasmid.loci.amr[,1] == levels(factor(plasmid.loci.amr[,1]))[i])[order(subset(plasmid.loci.amr, plasmid.loci.amr[,1] == levels(factor(plasmid.loci.amr[,1]))[i])[,2]),5]
+loci.amr.map[i,1:length(current.map)] <- as.character(current.map)
+rownames(loci.amr.map)[i] <- levels(factor(plasmid.loci.amr[,1]))[i]
+}
+
+frag.amr.long <- loci.amr.map
+
+for(i in 1:nrow(loci_fragment)){
+frag.amr.long[which(loci.amr.map == loci_fragment[i,1], arr.ind = TRUE)] <- loci_fragment[i,2]
+}
+
+df.condense.loci.amr <- as.data.frame(matrix(0, ncol = (2*nrow(loci_fragment)), nrow = nrow(frag.amr.long)))
+
+for(i in 1:dim(df.plasmid.fragment.order)[1]){
+    current.amr.order <- c(as.character(rle(frag.amr.long[i,])$values))
+    df.condense.loci.amr[i,1:length(current.amr.order)] <- current.amr.order
+    rownames(df.condense.loci.amr)[i] <- rownames(frag.amr.long)[i]
+}
+
+df.condense.loci.amr <- df.condense.loci.amr[,-(which(lapply(df.condense.loci.amr, class) == "numeric", arr.ind = TRUE))]
+
+if(length(which(rownames(frag.amr.long) %in% levels(factor(loci.complete$plasmid)) == FALSE, arr.ind = TRUE)) == 0){
+frag.amr.long <- frag.amr.long
+} else {
+frag.amr.long <- frag.amr.long[-(which(rownames(frag.amr.long) %in% levels(factor(loci.complete$plasmid)) == FALSE, arr.ind = TRUE)),]
+}
+
+df.loci.pattern.matrix <- matrix(0, nrow = 1, ncol = 3)
+colnames(df.loci.pattern.matrix) <- c("Plasmid", "Fragment_ID", "Loci_Order")
+cumulative.AMR <- matrix(0, nrow = 1, ncol = 12)
+cumulative.loci <- matrix(0, nrow = 1, ncol = 12)
+cumulative.plasmid <- matrix(0, nrow = 1, ncol = 10)
+cumulative.fragment.ST <- matrix(0, nrow = 1, ncol = 4)
+
+
+for( current.k in 1:dim(frag.amr.long)[1]){
+{
+current.loci.subset <- subset(loci.new.complete, loci.new.complete[,1] == rownames(frag.amr.long)[current.k])[,c(1,3,4,5,6,8,7,9)]
+
+current.AMR <- subset(plasmid.AMR, plasmid.AMR[,1] == rownames(frag.amr.long)[current.k])[,c(1,5,2,3,6,4)]
+
+current.AMR[,3] <- as.numeric(current.AMR[,3])
+current.AMR[,4] <- as.numeric(current.AMR[,4])
+current.AMR[,7] <- apply(current.AMR[,3:4],1,function(x) max(x)-min(x))
+
+current.AMR[,8] <- rep("annotation", dim(current.AMR)[1])
+colnames(current.AMR) <- colnames(current.loci.subset)
+
+current.complete.subset <- rbind(current.loci.subset, current.AMR)
+
+current.complete.subset <- current.complete.subset[order(current.complete.subset$sequence.start),]
+current.loci.subset <- current.loci.subset[order(current.loci.subset$sequence.start),]
+
+current.loci.subset[,9] <- rep(0, dim(current.loci.subset)[1])
+current.loci.subset[,10] <- rep(0, dim(current.loci.subset)[1])
+
+current.loci.subset[1,9] <- 1
+
+for(i in 2:dim(current.loci.subset)[1]){ 
+ ifelse(current.loci.subset[i,8] != current.loci.subset[i-1,8], current.loci.subset[i,9] <- current.loci.subset[i-1,9] + 1, current.loci.subset[i,9] <- current.loci.subset[i-1,9])
+ }
+
+p <- 0
+r <- 0
+current.loci.subset[1,10] <- 1
+ if(dim(current.loci.subset)[1] > 1){
+ for(i in 2:dim(current.loci.subset)[1]){
+	if((current.loci.subset[i,8] == current.loci.subset[i-1,8]) && (min(current.loci.subset[i,3:4]) - max(current.loci.subset[i-1,3:4]) > (2*i.threshold) )){
+		r <- p + 1
+	}
+	current.loci.subset[i,10] <- current.loci.subset[i,9] + r
+		p <- r
+ }
+}
+
+
+current.loci.subset[,11] <- rep(0, nrow(current.loci.subset))
+current.loci.subset[,12] <- rep(0, nrow(current.loci.subset))
+
+if(nrow(current.loci.subset) == 1){
+	current.loci.subset[1,12] <- 1
+	}
+	else
+	{
+	for(i in 1:(nrow(current.loci.subset) - 1)){current.loci.subset[i,12] <- (min(current.loci.subset[i+1,3:4]) - max(current.loci.subset[i,3:4]))}
+	}
+
+plasmid.info.table <- matrix(0, ncol = 2, nrow = max(current.loci.subset[,10]))
+plasmid.results <- as.data.frame(matrix(0, ncol = 8, nrow = max(current.loci.subset[,10])))
+colnames(plasmid.results)[] <- c("Fragment_ID", "Loci_count", "Loci_composition", "Distance_between_fragments", "AMR_between_fragments", "Fragment_start", "Fragment_end", "Fragment_size")
+
+plasmid.results[,1] <-current.loci.subset[match(unique(current.loci.subset$V10), current.loci.subset$V10),8]
+
+plasmid.results[,2] <- rowSums(table(current.loci.subset$V10, current.loci.subset$fragment))
+
+plasmid.info.table[1,1] <- 1
+plasmid.info.table[1,2] <- plasmid.results[1,2]
+
+if(dim(plasmid.info.table)[1] > 1){
+for(i in 2:dim(plasmid.info.table)[1]){
+plasmid.info.table[i,1] <- (plasmid.info.table[(i-1),2] + 1)
+plasmid.info.table[i,2] <- plasmid.info.table[i,1] + plasmid.results[i,2] - 1
+}}
+
+for(i in 1:dim(plasmid.results)[1]){
+plasmid.results[i,3] <- toString(paste(current.loci.subset[,2], current.loci.subset[,5], sep = "_var.")[plasmid.info.table[i,1]:plasmid.info.table[i,2]])
+plasmid.results[i,6] <- min(current.loci.subset[plasmid.info.table[i,1],3:4])
+plasmid.results[i,7] <- max(current.loci.subset[plasmid.info.table[i,2],3:4])
+plasmid.results[i,8] <- plasmid.results[i,7] - plasmid.results[i,6]
+}
+plasmid.results[,9] <- rep(rownames(frag.amr.long)[current.k], dim(plasmid.results)[1])
+plasmid.results[,10] <- seq(from = 1, to = dim(plasmid.results)[1], by = 1)
+
+for(i in 1:(dim(plasmid.results)[1] - 1)){
+plasmid.results[i,4] <- plasmid.results[i+1,6] - plasmid.results[i,7]
+}
+
+current.loci.pattern.matrix <- matrix(0, nrow = nrow(plasmid.results), ncol = 3)
+colnames(current.loci.pattern.matrix) <- c("Plasmid", "Fragment_ID", "Loci_Order")
+
+current.loci.pattern.matrix[,1] <- plasmid.results[,9]
+current.loci.pattern.matrix[,2] <- plasmid.results[,1]
+
+for(loci.pattern in 1:nrow(plasmid.results)){
+
+if(loci.pattern == 1){
+current.loci.pattern.matrix[loci.pattern,3] <- paste(df.plasmid.loci.order.num[which(rownames(df.plasmid.loci.order.num)==plasmid.results[1,9], arr.ind = TRUE),(1:sum(plasmid.results[1:loci.pattern,2]))], collapse = " ")
+} else {
+current.loci.pattern.matrix[loci.pattern,3] <- paste(df.plasmid.loci.order.num[which(rownames(df.plasmid.loci.order.num)==plasmid.results[1,9], arr.ind = TRUE),(sum(plasmid.results[1:(loci.pattern - 1),2])+1):sum(plasmid.results[1:loci.pattern,2])], collapse = " ")
+}
+}
+
+df.loci.pattern.matrix <- rbind.data.frame(df.loci.pattern.matrix, current.loci.pattern.matrix)
+
+current.fragment.ST <- as.data.frame(matrix(0, nrow=length(unique(current.loci.subset[,10])), ncol = 4))
+current.fragment.subset <- current.loci.subset[,c(1,2,5,8,10)]
+for(i in 1:nrow(current.fragment.subset)){current.fragment.subset[i,2] <- match(current.fragment.subset[i,2], rownames(df.loci.ind))}
+current.fragment.subset[,3] <- paste0(current.fragment.subset[,2], ".", current.fragment.subset[,3])
+current.fragment.subset <- current.fragment.subset[order(current.fragment.subset[,3]),]
+
+current.fragment.ST[,1] <- current.fragment.subset[1,1]
+for(i in 1:nrow(current.fragment.ST)){
+current.fragment.ST[i,2] <- subset(current.fragment.subset, current.fragment.subset[,5] == i)[1,4]
+current.fragment.ST[i,3] <- paste0(subset(current.fragment.subset, current.fragment.subset[,5] == i)[,3], collapse = " ")
+}
+
+cumulative.fragment.ST <- rbind(cumulative.fragment.ST, current.fragment.ST)
+
+for(i in 1:(dim(plasmid.results)[1] - 1)){
+    plasmid.results[i,5] <- toString(paste(subset(current.AMR[,2], current.AMR[,3] > plasmid.results[i,7] & current.AMR[,3] < plasmid.results[i+1,6]), sep = ", "))
+}
+
+colnames(cumulative.plasmid) <- colnames(plasmid.results)
+cumulative.plasmid <- rbind(cumulative.plasmid, plasmid.results)
+
+current.AMR[,9] <- rep(0, dim(current.AMR)[1])
+current.AMR[,10] <- rep(0, dim(current.AMR)[1]) 
+current.AMR[,11] <- rep(0, dim(current.AMR)[1])
+current.AMR[,12] <- rep(0, dim(current.AMR)[1])
+
+current.AMR[,9] <- plasmid.results[match(apply(as.matrix(current.AMR[,3]), 1, function(x) max(plasmid.results[plasmid.results[,7] < x,7])), plasmid.results[,7] ),1]
+
+current.AMR[,10] <- plasmid.results[match(apply(as.matrix(current.AMR[,4]), 1, function(x) min(plasmid.results[plasmid.results[,6] > x,6])), plasmid.results[,6] ),1]
+
+current.AMR[,11] <- current.AMR[,3] - apply(as.matrix(current.AMR[,3]), 1, function(x) max(plasmid.results[plasmid.results[,7] < x,7]))
+
+current.AMR[,12] <- abs(current.AMR[,4] - apply(as.matrix(current.AMR[,4]), 1, function(x) min(plasmid.results[plasmid.results[,6] > x,6])))
+colnames(current.AMR)[9:12] <- c("upstream_fragment", "downstream_fragment", "bp_to_upstream", "bp_to_downstream")
+
+current.loci.subset[,11] <- paste(current.loci.subset[,2], current.loci.subset[,5], sep = "_var")
+colnames(current.loci.subset)[9:11] <- c("fragment_order_by_ID", "final_fragment_order", "locus_and_variant")
+
+colnames(cumulative.loci) <- colnames(current.loci.subset)
+cumulative.loci <- rbind(cumulative.loci, current.loci.subset)
+
+colnames(cumulative.AMR) <- colnames(current.AMR)
+
+cumulative.AMR <- rbind(cumulative.AMR, current.AMR)
+}
+}
+
+
+df.loci.pattern.matrix[,4] <- rep(0, nrow(df.loci.pattern.matrix))
+df.loci.pattern.matrix[,5] <- rep(0, nrow(df.loci.pattern.matrix))
+colnames(df.loci.pattern.matrix)[c(4,5)] <- c("Pattern_ID","Fragment_Pattern_ID")
+
+if(version == 1){
+
+current.condense.frag.order.bak <- as.data.frame(matrix(0, ncol = 2, nrow = nrow(df.condense.frag.order.bak)))
+
+for(i in 1:nrow(df.condense.frag.order.bak)){
+	if(sum(which(df.condense.frag.order.bak[i,] == "0")) != 0) {
+	current.condense.frag.order.bak[i,2] <- paste0(df.condense.frag.order.bak[i,1:(which(df.condense.frag.order.bak[i,] == "0")[1] - 1)], collapse = " ")
+	} else {
+	current.condense.frag.order.bak[i,2] <- paste0(df.condense.frag.order.bak[i,1:(ncol(df.condense.frag.order.bak)- 1)], collapse = " ")
+	}
+	rownames(current.condense.frag.order.bak)[i] <- rownames(df.condense.frag.order.bak)[i]
+}
+
+current.condense.frag.order.bak[,1] <- df.condense.frag.order.bak[,ncol(df.condense.frag.order.bak)]
+} else {
+current.condense.frag.order.bak <- df.condense.frag.order.bak
+}
+
+current.condense.frag.order <- as.data.frame(matrix(0, ncol = 2, nrow = nrow(df.condense.frag.order)))
+
+for(i in 1:nrow(df.condense.frag.order)){
+	if(sum(which(df.condense.frag.order[i,] == "0")) != 0) {
+	current.condense.frag.order[i,2] <- paste0(df.condense.frag.order[i,1:(which(df.condense.frag.order[i,] == "0")[1] - 1)], collapse = " ")
+	} else {
+	current.condense.frag.order[i,2] <- paste0(df.condense.frag.order[i,1:(ncol(df.condense.frag.order)- 1)], collapse = " ")
+	}
+	rownames(current.condense.frag.order)[i] <- rownames(df.condense.frag.order)[i]
+}
+
+
+existing.frag.order <- current.condense.frag.order[which(current.condense.frag.order[,2] %in% current.condense.frag.order.bak[,2] == TRUE),]
+novel.frag.order <- current.condense.frag.order[which(current.condense.frag.order[,2] %in% current.condense.frag.order.bak[,2] != TRUE),]
+
+for(i in 1:nrow(existing.frag.order)){
+	existing.frag.order[i,1] <- current.condense.frag.order.bak[which(current.condense.frag.order.bak[,2] == existing.frag.order[i,2], arr.ind = TRUE)[1],1]
+	}
+
+
+if(nrow(novel.frag.order) != 0){
+	novel.frag.order[,1] <- as.numeric(factor(novel.frag.order[,2])) + max(max(current.condense.frag.order.bak[,1]))
+	current.condense.frag.order.new <- rbind(existing.frag.order, novel.frag.order)
+	} else {
+	current.condense.frag.order.new <- existing.frag.order
+	}
+
+
+df.loci.pattern.matrix <- subset(df.loci.pattern.matrix, df.loci.pattern.matrix$Loci_Order != 0)
+df.loci.pattern.matrix[,4] <- rep(0, nrow(df.loci.pattern.matrix)) 
+colnames(df.loci.pattern.matrix)[4] <- "Frag_Str_Variant"
+
+pre.loci.pattern.matrix <- df.loci.pattern.matrix[which(df.loci.pattern.matrix$Loci_Order %in% df.loci.pattern.matrix.bak$Loci_Order != TRUE, arr.ind = TRUE),]
+rename.loci.pattern.matrix <- df.loci.pattern.matrix[which(df.loci.pattern.matrix$Loci_Order %in% df.loci.pattern.matrix.bak$Loci_Order == TRUE, arr.ind = TRUE),]
+
+for(i in 1:nrow(rename.loci.pattern.matrix)){
+	rename.loci.pattern.matrix[i,4] <- df.loci.pattern.matrix.bak[which(df.loci.pattern.matrix.bak[,3] == rename.loci.pattern.matrix[i,3], arr.ind = TRUE)[1],4]
+	}
+
+if(nrow(pre.loci.pattern.matrix) != 0){
+novel.loci.pattern.matrix <- as.data.frame(matrix(0, nrow = 1, ncol = 5))
+colnames(novel.loci.pattern.matrix) <- colnames(pre.loci.pattern.matrix)
+
+v.str.frag <- levels(factor(pre.loci.pattern.matrix[,2]))
+for(i in 1:length(v.str.frag)){
+	str.frag <- subset(pre.loci.pattern.matrix, pre.loci.pattern.matrix[,2] == v.str.frag[i])
+	str.frag[,4] <- (as.numeric(factor(str.frag[,3]))) + max(as.numeric(subset(df.loci.pattern.matrix.bak, df.loci.pattern.matrix.bak[,2] == v.str.frag[i])[,4]))
+	novel.loci.pattern.matrix <- rbind(novel.loci.pattern.matrix, str.frag)
+	}
+
+novel.loci.pattern.matrix <- subset(novel.loci.pattern.matrix, novel.loci.pattern.matrix[,1] != 0 )
+colnames(novel.loci.pattern.matrix) <- colnames(rename.loci.pattern.matrix)
+
+update.loci.pattern.matrix <- rbind(rename.loci.pattern.matrix, novel.loci.pattern.matrix)
+	} else {
+	update.loci.pattern.matrix <- rename.loci.pattern.matrix
+	}
+
+update.loci.pattern.matrix[,5] <- paste0(update.loci.pattern.matrix[,2],".",update.loci.pattern.matrix[,4])
+colnames(update.loci.pattern.matrix) <- colnames(df.loci.pattern.matrix.bak)
+
+df.plasmid.loci.structure.type <- as.data.frame(matrix(0, ncol = 3, nrow=length(levels(factor(update.loci.pattern.matrix[,1])))))
+colnames(df.plasmid.loci.structure.type) <- c("plasmid", "fragment_pattern", "plasmid_loci_ID")
+
+
+for(i in 1:length(levels(factor(update.loci.pattern.matrix[,1])))){
+	df.plasmid.loci.structure.type[i,1] <- levels(factor(update.loci.pattern.matrix[,1]))[i]
+	df.plasmid.loci.structure.type[i,2] <- paste0(subset(update.loci.pattern.matrix, update.loci.pattern.matrix[,1] == levels(factor(update.loci.pattern.matrix[,1]))[i])[,5][order(subset(update.loci.pattern.matrix, update.loci.pattern.matrix[,1] == levels(factor(update.loci.pattern.matrix[,1]))[i])[,5])], collapse = " ")
+	}
+
+rename.plasmid.loci.structure.type <- df.plasmid.loci.structure.type[which(df.plasmid.loci.structure.type$fragment_pattern %in% df.fragment.pattern.index[,1] == TRUE, arr.ind = TRUE),]
+novel.plasmid.loci.structure.type <- df.plasmid.loci.structure.type[which(df.plasmid.loci.structure.type$fragment_pattern %in% df.fragment.pattern.index[,1] != TRUE, arr.ind = TRUE),]
+
+for(i in 1:nrow(rename.plasmid.loci.structure.type)){
+	rename.plasmid.loci.structure.type[i,3] <- df.fragment.pattern.index[which(df.fragment.pattern.index[,1] == rename.plasmid.loci.structure.type[i,2], arr.ind = TRUE)[1],2]
+	}
+
+if(nrow(novel.plasmid.loci.structure.type) != 0){
+	novel.plasmid.loci.structure.type[,3] <- as.numeric(factor(novel.plasmid.loci.structure.type[,2])) + max(df.fragment.pattern.index[,2])
+	update.plasmid.loci.structure.type <- rbind(rename.plasmid.loci.structure.type, novel.plasmid.loci.structure.type)
+	} else {
+	update.plasmid.loci.structure.type <- rename.plasmid.loci.structure.type
+	}
+
+novel.fragment.ST <- cumulative.fragment.ST[which(cumulative.fragment.ST[,3] %in% df.fragment.ST.index[,1] != TRUE, arr.ind = TRUE),]
+rename.fragment.ST <- cumulative.fragment.ST[which(cumulative.fragment.ST[,3] %in% df.fragment.ST.index[,1] == TRUE, arr.ind = TRUE),]
+
+for(i in 1:nrow(rename.fragment.ST)){
+	rename.fragment.ST[i,4] <- df.fragment.ST.index[which(df.fragment.ST.index[,1] == rename.fragment.ST[i,3], arr.ind = TRUE)[1],2]
+	}
+
+ST.count <- separate(df.fragment.ST.index,2,c("fragment", "ST"))
+
+novel.fragment.ST <- novel.fragment.ST[which(novel.fragment.ST[,1] != 0),]
+
+if(nrow(novel.fragment.ST) != 0){
+for(i in 1:length(levels(factor(novel.fragment.ST[,2])))){
+	current.new.ST <- subset(novel.fragment.ST, novel.fragment.ST[,2] == levels(factor(novel.fragment.ST[,2]))[i])
+	current.new.ST[,4] <- as.numeric(factor(current.new.ST[,3]))
+	current.new.ST[,4] <- paste0(current.new.ST[,2],".",current.new.ST[,4] + max(as.numeric(subset(ST.count, ST.count[,2] == levels(factor(novel.fragment.ST[,2]))[i])[,3])))
+	novel.fragment.ST <- rbind(novel.fragment.ST, current.new.ST)
+}
+
+novel.fragment.ST <- novel.fragment.ST[which(is.na(novel.fragment.ST[,4]) != TRUE),]
+novel.fragment.ST <- novel.fragment.ST[which(novel.fragment.ST[,4] != 0),]
+cumulative.fragment.ST <- rbind(rename.fragment.ST, novel.fragment.ST)
+	} else {
+cumulative.fragment.ST <- rename.fragment.ST
+	}
+
+loci.new.complete.num <- loci.new.complete[,c(1,3,6)]
+for(i in 1:nrow(df.loci.ind)){loci.new.complete.num[which(loci.new.complete.num == rownames(df.loci.ind)[i], arr.ind = TRUE)] <- i}
+loci.new.complete.num[,4] <- paste0(loci.new.complete.num[,2], ".", loci.new.complete.num[,3])
+colnames(loci.new.complete.num)[4] <- "loci_variant"
+df.new.loci.plasmid.definitions <- as.data.frame(matrix(0, ncol = 4, nrow = length(levels(factor(loci.new.complete.num[,1])))))
+colnames(df.new.loci.plasmid.definitions) <- c("plasmid", "loci_seqeunce_order", "loci_typing_order", "plasmid_ST")
+for(i in 1:nrow(df.new.loci.plasmid.definitions)){
+	df.new.loci.plasmid.definitions[i,1] <- levels(factor(loci.new.complete.num[,1]))[i]
+	df.new.loci.plasmid.definitions[i,2] <- paste0(subset(loci.new.complete.num, loci.new.complete.num[,1] == levels(factor(loci.new.complete.num[,1]))[i])[,4], collapse = " ")
+	df.new.loci.plasmid.definitions[i,3] <- paste0(subset(loci.new.complete.num, loci.new.complete.num[,1] == levels(factor(loci.new.complete.num[,1]))[i])[,4][order(as.numeric(subset(loci.new.complete.num, loci.new.complete.num[,1] == levels(factor(loci.new.complete.num[,1]))[i])[,4]))], collapse = " ")
+	}
+df.new.loci.plasmid.definitions[,4] <- as.numeric(factor(df.new.loci.plasmid.definitions[,3]))
+
+loci.complete.num <- rbind(loci.complete.num, loci.new.complete.num)
+
+if(version == 1){
+
+rename.loci.definitions <- df.new.loci.plasmid.definitions[which(df.new.loci.plasmid.definitions[,3] %in% df.loci.plasmid.definitions[,3] == TRUE, arr.ind = TRUE),]
+novel.loci.definitions <- df.new.loci.plasmid.definitions[which(df.new.loci.plasmid.definitions[,3] %in% df.loci.plasmid.definitions[,3] != TRUE, arr.ind = TRUE),]
+
+for(i in 1:nrow(rename.loci.definitions)){
+	rename.loci.definitions[i,4] <- df.loci.plasmid.definitions[match(rename.loci.definitions[i,3], df.loci.plasmid.definitions[,3]),4]
+	}
+
+if(nrow(novel.loci.definitions) != 0){
+	novel.loci.definitions[,4] <- as.numeric(factor(novel.loci.definitions[,3])) + max(df.loci.plasmid.definitions[,4])
+	df.new.loci.plasmid.definitions <- rbind(rename.loci.definitions, novel.loci.definitions)
+	} else {
+	df.new.loci.plasmid.definitions <- rename.loci.definitions
+	}
+
+} else {
+
+
+rename.loci.definitions <- df.new.loci.plasmid.definitions[which(df.new.loci.plasmid.definitions[,3] %in% df.plasmid.loci.definitions[,3] == TRUE, arr.ind = TRUE),]
+novel.loci.definitions <- df.new.loci.plasmid.definitions[which(df.new.loci.plasmid.definitions[,3] %in% df.plasmid.loci.definitions[,3] != TRUE, arr.ind = TRUE),]
+
+for(i in 1:nrow(rename.loci.definitions)){
+	rename.loci.definitions[i,4] <- df.plasmid.loci.definitions[match(rename.loci.definitions[i,3], df.plasmid.loci.definitions[,3]),4]
+	}
+
+if(nrow(novel.loci.definitions) != 0){
+	novel.loci.definitions[,4] <- as.numeric(factor(novel.loci.definitions[,3])) + max(df.plasmid.loci.definitions[,4])
+	df.new.loci.plasmid.definitions <- rbind(rename.loci.definitions, novel.loci.definitions)
+	} else {
+	df.new.loci.plasmid.definitions <- rename.loci.definitions
+	}
+
+}
+
+df.condense.frag.order <- rbind(current.condense.frag.order.bak, current.condense.frag.order.new)
+
+df.loci.pattern.matrix <- rbind(df.loci.pattern.matrix.bak, update.loci.pattern.matrix)
+
+update.plasmid.loci.structure.type <- update.plasmid.loci.structure.type[which(is.na(update.plasmid.loci.structure.type[,3])!= TRUE),]
+colnames(df.condense.loci.fragment.pattern.bak) <- colnames(update.plasmid.loci.structure.type)
+df.condense.loci.fragment.pattern <- rbind(df.condense.loci.fragment.pattern.bak, update.plasmid.loci.structure.type)
+
+df.fragment.pattern.index <- unique(df.condense.loci.fragment.pattern[,2:3])[order(unique(df.condense.loci.fragment.pattern[,2:3])[,2]),]
+
+df.fragment.pattern.index <- unique(df.fragment.pattern.index)
+
+colnames(cumulative.fragment.ST.bak) <- colnames(cumulative.fragment.ST)
+cumulative.fragment.ST <- rbind(cumulative.fragment.ST.bak, cumulative.fragment.ST)
+df.fragment.ST.index <- unique(cumulative.fragment.ST[,3:4])
+
+if(version == 1){
+df.plasmid.loci.definitions <- rbind(df.loci.plasmid.definitions, df.new.loci.plasmid.definitions)
+df.plasmid.loci.definitions <- df.plasmid.loci.definitions[which(is.na(df.plasmid.loci.definitions[,4]) != TRUE, arr.ind = TRUE),]
+df.plasmid.loci.index <- unique(df.plasmid.loci.definitions[,3:4])
+} else {
+df.new.loci.plasmid.definitions <- df.new.loci.plasmid.definitions[which(is.na(df.new.loci.plasmid.definitions[,4]) != TRUE, arr.ind = TRUE),]
+df.plasmid.loci.definitions <- rbind(df.plasmid.loci.definitions, df.new.loci.plasmid.definitions)
+df.plasmid.loci.index <- unique(df.plasmid.loci.definitions[,3:4])
+}
+
+colnames(cumulative.plasmid) <- colnames(cumulative.plasmid.bak)
+
+cumulative.plasmid <- rbind(cumulative.plasmid.bak, cumulative.plasmid)
+cumulative.AMR <- rbind(cumulative.AMR.bak, cumulative.AMR)
+
+rownames(df.fragment.ST.index) <- 1:(nrow(df.fragment.ST.index))
+
+df.plasmids.typed <- as.data.frame(matrix(0, nrow=length(levels(factor(df.condense.loci.fragment.pattern[,1]))), ncol = 7))
+for(i in 1:length(levels(factor(df.condense.loci.fragment.pattern[,1])))){
+	df.plasmids.typed[i,1] <- levels(factor(df.condense.loci.fragment.pattern[,1]))[i]
+	df.plasmids.typed[i,2] <- selected.plasmid
+	df.plasmids.typed[i,3] <- df.condense.frag.order[which(rownames(df.condense.frag.order) == levels(factor(df.condense.loci.fragment.pattern[,1]))[i]),1]
+	df.plasmids.typed[i,4] <- subset(df.condense.loci.fragment.pattern, df.condense.loci.fragment.pattern[,1] == levels(factor(df.condense.loci.fragment.pattern[,1]))[i])[,ncol(df.condense.loci.fragment.pattern)][1]
+	df.plasmids.typed[i,5] <- df.plasmid.loci.definitions[which(df.plasmid.loci.definitions[,1] == levels(factor(df.condense.loci.fragment.pattern[,1]))[i]),4]
+	df.plasmids.typed[i,6] <- paste0(cumulative.fragment.ST[which(cumulative.fragment.ST[,1] == levels(factor(df.condense.loci.fragment.pattern[,1]))[i]),4], collapse = ", ")
+	df.plasmids.typed[i,7] <- paste0(cumulative.plasmid[which(cumulative.plasmid$Molecule == levels(factor(df.condense.loci.fragment.pattern[,1]))[i], arr.ind = TRUE),4][-(length( cumulative.plasmid[which(cumulative.plasmid$Molecule == levels(factor(df.condense.loci.fragment.pattern[,1]))[i], arr.ind = TRUE),4]))], collapse = ", ")
+}
+
+colnames(df.plasmids.typed) <- c("subject", "typing_plasmid", "fragment_pattern", "loci_pattern","plasmid_ST", "fragment_ST", "InterFragment_distance")
+
+frag.plasmid.db <- cumulative.plasmid[,c(1,6,7,1,1,1,1,9)]
+colnames(frag.plasmid.db) <- c("name","start","end","strand","variant","fill","col","plasmid")
+frag.plasmid.db$strand <- rep(1,nrow(frag.plasmid.db))
+frag.plasmid.db$variant <- rep("fragment",nrow(frag.plasmid.db))
+frag.plasmid.db$fill <- rep("black",nrow(frag.plasmid.db))
+frag.plasmid.db$col <- rep("black",nrow(frag.plasmid.db))
+
+AMR.plasmid.db <- cumulative.AMR[,c(2,3,4,6,5,8,8,1)]
+colnames(AMR.plasmid.db) <- c("name","start","end","strand","variant","fill","col","plasmid")
+AMR.plasmid.db$col <- rep("black", nrow(AMR.plasmid.db))
+AMR.plasmid.db[which(AMR.plasmid.db$strand == "-", arr.ind = TRUE),4] <- "-1"
+AMR.plasmid.db[which(AMR.plasmid.db$strand == "+", arr.ind = TRUE),4] <- "1"
+AMR.plasmid.db[which(AMR.plasmid.db$variant == "AMR", arr.ind = TRUE),6] <- "red"
+AMR.plasmid.db[which(AMR.plasmid.db$variant == "STRESS", arr.ind = TRUE),6] <- "yellow"
+AMR.plasmid.db[which(AMR.plasmid.db$variant == "VIRULENCE", arr.ind = TRUE),6] <- "green"
+
+df.annotation <- rbind(frag.plasmid.db, AMR.plasmid.db)
+df.annotation <- rbind(df.annotation.bak, df.annotation)
+
+if(file.exists(paste0("./", project.name,"/results")) != TRUE){
+	system(paste0("mkdir ./", project.name,"/results"))
+	} else {
+	x <- 1
+	}
+
+# Annotation data for the entire dataset, used for mapping
+write.csv(df.annotation, paste0("./",project.name,"/results/",selected.plasmid,"_plasmid.data"), row.names = FALSE)
+
+# Detailed plasmid information, used for plasmid report page
+write.csv(cumulative.plasmid, paste0("./",project.name,"/results/",selected.plasmid, "_plasmid.results"), row.names = FALSE)
+
+# AMR location data for all plasmids in the current database
+write.csv(cumulative.AMR, paste0("./",project.name,"/results/",selected.plasmid, "_AMR.results"), row.names = FALSE)
+
+# Summary information of all plasmids after sequence, structure and interfragment distance typing
+write.csv(df.plasmids.typed, paste0("./",project.name,"/results/",selected.plasmid, "_summary.csv"), row.names = FALSE)
+
+# Definitions for individual fragments based on loci order
+write.csv(unique(df.loci.pattern.matrix[,c(2,3,4,5)]), paste0("./",project.name,"/results/",selected.plasmid, "_Reference_Structure_FragmentLoci.csv"), row.names = FALSE)
+
+# Definitions for plasmid structure type based on the re-ordered combination of fragment structure type
+write.csv(df.fragment.pattern.index, paste0("./",project.name,"/results/",selected.plasmid, "_StructureType_PlasmidLoci.csv"), row.names = FALSE)
+
+# Definitions of fragment sequence type based on the loci/allele combinations
+write.csv(df.fragment.ST.index, paste0("./",project.name,"/results/",selected.plasmid, "_SequenceType.csv"), row.names = FALSE)
+
+# Definitions for the plasmid structure typed based on the actual order of fragments
+write.csv(unique(df.condense.frag.order), paste0("./",project.name,"/results/",selected.plasmid, "_StructureType_PlasmidFragment.csv"), row.names = FALSE)
+
+
+write.csv(ref.loci.variant[order(ref.loci.variant$loci),], paste0("./",project.name,"/results/",selected.plasmid, "_Loci_Allele_Sequence.csv"), row.names = FALSE)
+
+cumulative.AMR.bak <- cumulative.AMR
+cumulative.plasmid.bak <- cumulative.plasmid
+df.annotation.bak <- df.annotation
+df.condense.frag.order.bak <- df.condense.frag.order
+
+df.test <- cbind(df.plasmid.loci.order, matrix(0, nrow = 14, ncol = (ncol(df.plasmid.loci.order.bak)-ncol(df.plasmid.loci.order))))
+colnames(df.test) <- colnames(df.plasmid.loci.order.bak)
+df.plasmid.loci.order.bak <- rbind(df.plasmid.loci.order.bak, df.test)
+
+df.plasmid.loci.order.num <- df.plasmid.loci.order.bak
+
+df.plasmid.loci.order.num.bak <- df.plasmid.loci.order.num
+
+df.plasmids.typed.bak <- df.plasmids.typed
+df.loci.pattern.matrix.bak <- df.loci.pattern.matrix
+df.fragment.pattern.index.bak <- df.fragment.pattern.index
+df.fragment.ST.index.bak <- df.fragment.ST.index
+
+new.loci.variant <- unique(df.new.analysis[,c(3,14,15)])[,c(1,3,2)]
+ref.loci.variant <- rbind(ref.loci.variant, new.loci.variant)
+ref.loci.variant.bak <- ref.loci.variant
+
+df.condense.loci.fragment.pattern.bak <- df.condense.loci.fragment.pattern
+cumulative.fragment.ST.bak <- cumulative.fragment.ST
+
+df.condense.frag.order.con <- as.data.frame(matrix(0, nrow = nrow(df.condense.frag.order.bak), ncol = 2))
+rownames(df.condense.frag.order.con) <- rownames(df.condense.frag.order.bak)
+df.condense.frag.order.con[,1] <- df.condense.frag.order.bak[,ncol(df.condense.frag.order.bak)]
+
+for(i in 1:nrow(df.condense.frag.order.bak)){
+	current.list <- df.condense.frag.order.bak[i,1:(ncol(df.condense.frag.order.bak) - 1)]
+	if(length(grep(current.list, pattern = 0)) == 0){
+	df.condense.frag.order.con[i,2] <- paste0(current.list, collapse = " ")
+	} else {
+	df.condense.frag.order.con[i,2] <- paste0(current.list[which(current.list != 0, arr.ind = TRUE)], collapse = " ")
+	}
+	}
+
+unique.temp <- unique(df.condense.frag.order.bak)
+df.condense.frag.order.index <- as.data.frame(matrix(0, ncol = 2, nrow = nrow(unique.temp)))
+df.condense.frag.order.index[,1] <- unique.temp[,ncol(unique.temp)]
+for(i in 1:nrow(df.condense.frag.order.index)){
+	if(sum(which(unique.temp[i,] == "0")) != 0) {
+	df.condense.frag.order.index[i,2] <- paste0(unique.temp[i,1:(which(unique.temp[i,] == "0")[1] - 1)], collapse = " ")
+	} else {
+	df.condense.frag.order.index[i,2] <- paste0(unique.temp[i,1:(ncol(unique.temp)- 1)], collapse = " ")
+	}
+}
+
+						
+df.annotation <- df.annotation[which(df.annotation[,1] > 0),]
+						
+save.image(paste0("./",project.name,"/data/Step6.Rdata")) 

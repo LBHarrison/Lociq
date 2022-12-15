@@ -1,0 +1,449 @@
+#!/usr/bin/env Rscript
+args = commandArgs(trailingOnly=TRUE)
+i.threshold <- as.numeric(args)[1]
+selected.plasmid <- as.character(args)[2]
+
+load(paste0("./",selected.plasmid,"/data/Step3.Rdata"))
+
+val.step2.hits <- read.delim(paste0("./",selected.plasmid,"/fragments/val_only.hits"), sep = "\t", header = FALSE)
+    
+    df.dataset.hits <- as.data.frame(val.step2.hits)
+    
+    # Assign BLAST format 6 headers to the hit table of 'df.dataset.hits'
+    colnames(df.dataset.hits)[] <- c("loci", "plasmid", "perc_ident", "alignment_length", "mismatches", "gaps", "loci-start", "loci-end", "sequence-start", "sequence-end", "e-value", "bit-score")
+    
+    # Obtain IDs for all the plasmids and loci evaluated
+    plas.fac <- c((levels(factor(df.dataset.hits$plasmid))))
+    loci.fac <- c((levels(factor(df.dataset.hits$loci))))
+    
+    # Generating an empty dataframe to look for co-localizations of plasmid loci
+    df.freq <- as.data.frame(matrix(0, ncol = length(loci.fac), nrow = length(loci.fac)))
+    # Give the rows and labels the appropriate names
+    rownames(df.freq)[] <- loci.fac
+    colnames(df.freq)[] <- loci.fac
+    
+    # counting the frequency of each plasmid and hits - this is possibly redundant
+    df.plasfreq <- as.data.frame(table(df.dataset.hits[,2]))
+    df.hitfreq <- as.data.frame(table(df.dataset.hits[,2]))
+    
+    # converting plasmid names into a list of character values
+    plas.list <- as.character(df.plasfreq[df.plasfreq[,2] > 0,1])
+    
+    # Generating an empty dataframe to put the results
+    results.table <- as.data.frame(matrix(ncol = (2*length(plas.list)), nrow = max(df.hitfreq[df.plasfreq[,2] > 5,2])))
+    
+    
+    ### Begin Loop 1 to generate a dataframe of plasmids detailing loci-in-order and performing the first step in identifying contiguos fragments
+    
+    #################################################
+    # IDENTIFYING PROXIMITY AND CONTIGUITY OF LOCI  #
+    #################################################
+    
+    
+    # Determine the number of neighbors for each loci and condense into fragments
+    
+    for( i in 1:length(plas.list)){
+      
+      temp <- subset(df.dataset.hits,df.dataset.hits$plasmid == plas.list[i])
+      
+      rownames(temp) <- seq(length=nrow(temp))
+      
+      df.sequence <- as.data.frame(temp[order(pmin(temp$'sequence-start', temp$'sequence-end')),c(1,9,10)])
+      
+      df.sequence[,4:8] <- matrix(0, ncol = 5, nrow = c(length(df.sequence[,1])))
+      
+      colnames(df.sequence)[4:8] <- c("present.upstream", "present.downstream", "neighbors", "type", "fragment")
+      
+      for(l in 1:length(df.sequence[,1]))
+      { j <- l+1
+      ifelse(min(df.sequence[j,2:3]) < (max(df.sequence[(l),2:3]) + i.threshold), df.sequence[j,4] <- 1, df.sequence[j,4] <- 0)
+      ifelse(max(df.sequence[l,2:3]) > (min(df.sequence[(l+1),2:3]) - i.threshold), df.sequence[l,5] <- 1, df.sequence[l,5] <- 0)
+      }
+      
+      
+      df.sequence[,6] <- (as.numeric(df.sequence[,4]) + as.numeric(df.sequence[,5]))
+      df.sequence[df.sequence$neighbors == 1,7] <- "TERMINUS"
+      df.sequence[df.sequence$neighbors == 2,7] <- "MIDDLE"
+      df.sequence[df.sequence$neighbors == 0,7] <- "SINGLET"
+      
+      # Assign a numeric identifier to each of the plasmids
+      k <- 0
+      for(m in 1:length(df.sequence[,1])){
+        ifelse(df.sequence[m,4] == 0, k <- (k+1), k <- k)
+        df.sequence[m,8] <- k
+      }
+      
+      
+      colnames(results.table)[((2*i)-1):(2*i)] <- c(paste(plas.list[i],"_loci", sep=""), paste(plas.list[i],"_fragment", sep=""))
+      results.table[1:length(df.sequence$loci),((2 * i) - 1)] <- as.character(df.sequence$loci)
+      results.table[1:length(df.sequence$loci),(2 * i)] <- df.sequence$fragment
+    }
+    
+    
+    #################################################
+    # GENERATION OF CO-LOCALIZATION FREQUENCY TABLE #
+    #################################################
+    
+    
+    ### START LOOP 1 - OBTAIN LOCI INDEX IN TABLE
+    # for each loci
+    for(i in 1:length(loci.fac)){
+      
+      # establish name for current loci
+      c.place <- loci.fac[i]
+      
+      # pull out position for each loci
+      df.cluster <- as.data.frame(which(results.table == c.place, arr.ind = TRUE))
+      
+      # create column for cluster ID
+      df.cluster[,3] <- rep(0,length(df.cluster[,1]))
+      colnames(df.cluster)[3] <- "cluster"
+      
+      #loop through the table and populate column
+      #corresponds to the match(i) location +1 row over where group ID is
+      
+      ### START LOOP 2 - GET CLUSTER IDs FOR CURRENT LOCI
+      # For each row of the loci hit table
+      for(j in 1:length(df.cluster[,1])){
+        
+        # extract the group ID and populate cluster column 3
+        df.cluster[j,3] <- results.table[df.cluster[j,1], (df.cluster[j,2])+1]
+      }
+      
+      ### END LOOP 2, LOOP 1 ONGOING
+      
+      # Create space for new variables
+      # c.temp as a temporary list of loci associated with a cluster ID
+      c.temp <- paste(c.place, "_count", sep = "")
+      
+      # cl.filter as c.temp sans NA
+      cl.filter <- 0
+      
+      # cl.fragment as the running list of loci on each fragment
+      cl.fragment <- 0
+      
+      # START LOOP 3 - FIND LOCI ON SAME FRAGMENT AND GENERATE FREQUENCY TABLE
+      # For each row of the cluster table
+      for(k in 1:length(df.cluster[,1])){
+        
+        # collect all loci from the current plasmid/fragment combination and place into the variable cl.fragment
+        cl.fragment <- results.table[results.table[,(df.cluster[k,2]+1)] == df.cluster[k,3],df.cluster[k,2]]
+        
+        # filter out the NA values
+        cl.filter <- cl.fragment[which(cl.fragment != "NA")]
+        
+        # add to a running list of all fragments
+        c.temp <- append(c.temp, cl.filter)
+        
+        # remove initial c.temp value
+        c.temp <- c.temp[which(c.temp != paste(c.place, "_count", sep = ""))]
+        
+        # tabulate frequency of each loci on the fragment
+        temp.tbl <- as.data.frame(table(c.temp))
+        
+        # match rowname to current loci and colname to the co-occuring loci and populate with the corresponding counts from the current loci frequency table
+        df.freq[match(c.place, rownames(df.freq)), match(temp.tbl[,1], colnames(df.freq))] <- temp.tbl[,2]
+      }
+      # END LOOP 3, LOOP 1 ONGOING
+    }
+    # END LOOP 1
+    
+    #################################################
+    # GENERATION OF CORRELATION MATRIX AND ANALYSIS #
+    #################################################
+    
+    # Load library for analysis
+    library(Hmisc)
+    
+    # Remove duplicated loci
+    mx.freq <- as.matrix(df.freq)
+#   nodup.freq <- mx.freq[!duplicated(mx.freq), !duplicated(mx.freq)]
+    nodup.freq <- mx.freq
+
+    # Establish correlation matrix and generate tables for r and P values
+    cor.dataset <- rcorr(nodup.freq, type = c("pearson", "spearman"))
+    r.cor.dataset <- cor.dataset$r
+    p.cor.dataset <- cor.dataset$P
+
+    diag(p.cor.dataset) <- 0
+
+
+
+
+
+
+########################
+########################
+### CLUSTERING START ###
+########################
+########################
+
+## This step takes a while
+## In short, analyzing R values for clusters at cutoff heights for 1 - 0.1 by step size 0.1, with an escape to stop analyses once all clusters created have an average r-value of 0.9
+## This initializes the dataset, evaluating a cutoff value of 1
+
+    dist.r.cor.dataset <- dist(r.cor.dataset, method = "euclidean")
+    clust.r.cor.dataset <- hclust(dist.r.cor.dataset)
+    
+    # Establish clusters using a height of 1
+    current.height <- 1
+    tree.1.dataset <- cutree(clust.r.cor.dataset, h = current.height)
+    
+    # Generate frame for statistical descriptors of the fragments
+    plas.fragments <- length(table(tree.1.dataset))
+    frag.stats <- as.data.frame(matrix(0, ncol = 5, nrow = plas.fragments))
+    colnames(frag.stats)[] <- c("loci", "r-min", "r-avg", "p-max", "p-avg")
+    
+    # Populate the stat frame
+    for(j in 1:plas.fragments){
+      frag.stats[j,1] <- table(tree.1.dataset)[j];
+      frag.stats[j,2] <- min(r.cor.dataset[subset(names(tree.1.dataset), tree.1.dataset == j),subset(names(tree.1.dataset), tree.1.dataset == j)]);
+      frag.stats[j,3] <- mean(r.cor.dataset[subset(names(tree.1.dataset), tree.1.dataset == j),subset(names(tree.1.dataset), tree.1.dataset == j)]);
+      frag.stats[j,4] <- max(p.cor.dataset[subset(names(tree.1.dataset), tree.1.dataset == j),subset(names(tree.1.dataset), tree.1.dataset == j)]);
+      frag.stats[j,5] <- mean(p.cor.dataset[subset(names(tree.1.dataset), tree.1.dataset == j),subset(names(tree.1.dataset), tree.1.dataset == j)]);
+    }
+
+    last.iteration.fragcount <- 0
+    frag.stats <- frag.stats[order(frag.stats$'r-avg', decreasing = TRUE),]
+    rownames(frag.stats) <- c(1:nrow(frag.stats)) + last.iteration.fragcount
+    last.iteration.fragcount <- length(frag.stats$'r-avg'[which(frag.stats$'r-avg' >= 0.9, arr.ind = TRUE)])
+    
+    # Build a reference table for loci, their respective fragment and the number of instances of loci in the population
+    clustree <- matrix(0, ncol = 3, nrow = length(tree.1.dataset))
+    colnames(clustree) <- c("loci", "fragment", "count")
+    clustree[,1] <- rownames(nodup.freq)
+    clustree[,2] <- tree.1.dataset
+    
+    for(i in 1:length(tree.1.dataset)){
+      clustree[i,3] <- length(which(df.dataset.hits$loci == clustree[i,1]))
+    }
+    
+    temp.table <- results.table
+    df.loci.ind <- as.data.frame(tree.1.dataset)
+    plas.pos <- as.data.frame(matrix(0, ncol = 5, nrow = dim(temp.table)[1]))
+    
+    for(i in seq(4,(dim(temp.table)[2]),4)){
+      for(cur in 1:nrow(df.loci.ind)){
+        temp.table[,(i-2)][temp.table[,(i-3)] %in% rownames(df.loci.ind)[cur]] <- df.loci.ind$'tree.1.dataset'[cur]
+      }
+    }
+
+# This will subset out all the loci from df.loci.ind from fragments meeting the threshold value
+df.R90.loci <- subset(df.loci.ind, rownames(df.loci.ind) %in% names(tree.1.dataset[which(tree.1.dataset %in% which(frag.stats$'r-avg' >= 0.9, arr.ind = TRUE) == TRUE)]))
+
+# backup the values before entering the loop
+df.loci.ind.bak <- df.loci.ind
+frag.stats.bak <- frag.stats
+
+df.loci.minus <- df.loci.ind
+df.r.avg.matrix <- as.data.frame(matrix(0, ncol = 11, nrow = nrow(nodup.freq)))
+df.loci.minus[which(rownames(df.loci.ind) %in% names(tree.1.dataset[which(tree.1.dataset %in% which(frag.stats$'r-avg' < 0.9, arr.ind = TRUE) == TRUE)]), arr.ind = TRUE),1] <- 0
+df.r.avg.matrix[,1] <- df.loci.minus[,1]
+
+
+
+
+
+## Now to start looping through the subsequent iterations ##
+
+for(k in 1:9){
+
+if(length(which(df.r.avg.matrix[,k] == 0, arr.ind = TRUE)) != 0){
+current.height <- 1 - (k*0.1)    
+    tree.1.dataset <- cutree(clust.r.cor.dataset, h = current.height)
+    
+    # Generate frame for statistical descriptors of the fragments
+    plas.fragments <- length(table(tree.1.dataset))
+    frag.stats <- as.data.frame(matrix(0, ncol = 5, nrow = plas.fragments))
+    colnames(frag.stats)[] <- c("loci", "r-min", "r-avg", "p-max", "p-avg")
+
+# Let's try this
+
+    # Populate the stat frame
+    for(j in 1:plas.fragments){
+      frag.stats[j,1] <- table(tree.1.dataset)[j];
+      df.fragment <- r.cor.dataset[subset(names(tree.1.dataset), tree.1.dataset == j),subset(names(tree.1.dataset), tree.1.dataset == j)];
+      frag.stats[j,2] <- min(df.fragment);
+      frag.stats[j,3] <- mean(df.fragment);
+      frag.stats[j,4] <- max(df.fragment);
+      frag.stats[j,5] <- mean(df.fragment);
+
+    }
+
+    last.iteration.fragcount <- 0
+    frag.stats <- frag.stats[order(frag.stats$'r-avg', decreasing = TRUE),]
+    rownames(frag.stats) <- c(1:nrow(frag.stats)) + last.iteration.fragcount
+    last.iteration.fragcount <- length(frag.stats$'r-avg'[which(frag.stats$'r-avg' >= 0.9, arr.ind = TRUE)])
+    
+    # Build a reference table for loci, their respective fragment and the number of instances of loci in the population
+    clustree <- matrix(0, ncol = 3, nrow = length(tree.1.dataset))
+    colnames(clustree) <- c("loci", "fragment", "count")
+    clustree[,1] <- rownames(nodup.freq)
+    clustree[,2] <- tree.1.dataset
+    
+    for(i in 1:length(tree.1.dataset)){
+      clustree[i,3] <- length(which(df.dataset.hits$loci == clustree[i,1]))
+    }
+    
+    temp.table <- results.table
+    df.loci.ind <- as.data.frame(tree.1.dataset)
+    plas.pos <- as.data.frame(matrix(0, ncol = 5, nrow = dim(temp.table)[1]))
+    
+    for(i in seq(4,(dim(temp.table)[2]),4)){
+      for(cur in 1:nrow(df.loci.ind)){
+        temp.table[,(i-2)][temp.table[,(i-3)] %in% rownames(df.loci.ind)[cur]] <- df.loci.ind$'tree.1.dataset'[cur]
+      }
+    }
+
+df.loci.minus <- df.loci.ind
+df.loci.minus[which(rownames(df.loci.ind) %in% names(tree.1.dataset[which(tree.1.dataset %in% which(frag.stats$'r-avg' < 0.9, arr.ind = TRUE) == TRUE)]), arr.ind = TRUE),1] <- 0
+df.r.avg.matrix[,k+1] <- df.loci.minus[,1]
+} else {
+df.r.avg.matrix[,k+1] <- rep(100, nrow(df.r.avg.matrix))
+}
+}
+
+###
+###
+###
+### Now that we have the aggregate assignment, we condense
+###
+###
+###
+### Create a list of loci-fragment assignments in a collapsing approach (if permissive cluster calling allows for clusters that satisfy R-value criteria, that cluster is used.
+###  For the clusters that don't meet criteria, progressively stringent cluster calling is used until all clusters have R values above given threshold (in this case 0.9)
+
+rownames(df.r.avg.matrix) <- rownames(df.loci.ind)
+
+column.working <- as.numeric(which(sapply(df.r.avg.matrix, max)[1:10] == min(sapply(df.r.avg.matrix, max)[1:10]), arr.ind = TRUE)[1])
+column.init <- column.working
+column.init.max <- max(df.r.avg.matrix[,column.working])
+
+df.r.avg.matrix[,11] <- df.r.avg.matrix[,column.working]
+
+zero.loops <- 0
+
+no.fragment <- subset(df.r.avg.matrix, df.r.avg.matrix[,column.working] == 0)
+with.fragment <- subset(df.r.avg.matrix, df.r.avg.matrix[,column.working] != 0)
+
+for(i in column.init:9){
+column.working <- i
+
+if(length(which(no.fragment[,column.working+1] > 0)) == 0){
+	zero.loops <- zero.loops + 1
+} else {
+	adjustment <- min(no.fragment[which(no.fragment[,column.working+1] > 0, arr.ind = TRUE),column.working+1]) - 1
+	non.zeroes <- which(no.fragment[,column.working+1] > 0, arr.ind = TRUE)
+	no.fragment[non.zeroes,column.working+1] <- no.fragment[non.zeroes,column.working+1] - adjustment + column.init.max
+	no.fragment[,11] <- no.fragment[,column.working+1]
+	column.init.max <- max(no.fragment[,11])
+	with.fragment <- rbind(with.fragment, subset(no.fragment, no.fragment[,column.working+1] != 0))
+	no.fragment <- subset(no.fragment, no.fragment[,column.working+1] ==0)
+}
+}
+
+###########################
+###########################
+### CLUSTERING COMPLETE ###
+###########################
+###########################
+
+# encountered an error with corrplot v.0.92 where the plot is generated but the script is halted
+# process sucessfully proceeds with corrplot v.084
+  library(corrplot)
+  
+   png(file = paste0("./",selected.plasmid,"/",selected.plasmid,"_Interaction_Matrix_",i.threshold,".png"), width = 1800, height = 1800, res = 300)
+   corrplot(r.cor.dataset, type = "lower", hclust.method = "median", order = "hclust", p.mat = p.cor.dataset, insig = "blank", tl.col = "black", tl.cex = 0.4, cl.cex = 1, tl.srt = 45)
+   dev.off()
+  
+
+   df.loci.11 <- as.data.frame(with.fragment[,11])
+   rownames(df.loci.11) <- rownames(df.loci.ind)
+   colnames(df.loci.11) <- "loci"
+   write.csv(df.loci.11, paste0("./",selected.plasmid,"/fragments/loci.index"))
+   write.csv(frag.stats.bak, paste0("./",selected.plasmid,"/fragments/fragment.stats"))
+  
+library(plyr)
+library(dplyr)
+
+# Load data
+refset <- read.csv(paste0("./",selected.plasmid,"/validated/validated_loci.ID"), sep = "\t", header = FALSE)
+dataset <- read.csv(paste0("./",selected.plasmid,"/validated/validation.hits"), sep = "\t", header = FALSE)
+
+
+
+# Organize, clean and label data
+df.dataset.hits <- as.data.frame(dataset[which(dataset[,1] %in% refset[,1] == TRUE, arr.ind = TRUE),])
+df.dataset.hits <- droplevels(df.dataset.hits)
+df.dataset.hits[,13] <- rep(0, nrow(df.dataset.hits))
+colnames(df.dataset.hits)[c(7:10, 13)] <- c("loci.start", "loci.end", "sequence.start", "sequence.end", "orientation")
+
+# Assign locus directionality
+df.dataset.hits[which(df.dataset.hits$`sequence.start` < df.dataset.hits$`sequence.end`),13] <- 'plus'
+df.dataset.hits[which(df.dataset.hits$`sequence.start` > df.dataset.hits$`sequence.end`),13] <- 'minus'
+
+# Generate a reference file used by blastdbcmd to extract sequences from the database
+loci.coords <- as.data.frame(paste(df.dataset.hits[,2], paste(with(df.dataset.hits,pmin(sequence.start, sequence.end)),with(df.dataset.hits,pmax(sequence.start, sequence.end)), sep = "-"), df.dataset.hits[,13], sep = " "))
+
+# Provide a unique single identifier for plasmid/loci pair
+colnames(df.dataset.hits)[6] <- "unique"
+df.dataset.hits[,6] <- paste(df.dataset.hits[,2], df.dataset.hits[,1], sep = "_")
+
+# Create a presence/absence matrix (PAM) detailing which loci are present in which plasmid
+plasmid.PAM <- as.data.frame.matrix(table(df.dataset.hits[,2], df.dataset.hits[,1]))
+plasmid.PAM[which(plasmid.PAM[] != 0, arr.ind = TRUE)] <- 1
+
+# Create an empty table that will be populated by information needed to index the plasmids to the fewest number of starting loci
+blast.key.plasmid.PAM <- as.data.frame(matrix(0, nrow = nrow(plasmid.PAM), ncol = 5))
+blast.key.plasmid.PAM[,1] <- rownames(plasmid.PAM)
+
+# Create an empty list that will contain the set of sequence starting loci
+loci.count <- rep(0, nrow(refset))
+
+# Identify the most common loci found in all plasmids, to index the plasmid sequences 
+
+n <- 0
+while (sum(plasmid.PAM) > 1)
+{
+    n <- n+1
+    loci.presence <- ldply(plasmid.PAM, function(c) sum(c =="0"))
+    locus <- subset(loci.presence, loci.presence[,2] == min(loci.presence[,2]))[1,1]
+    loci.count[n] <- locus
+    blast.key.plasmid.PAM[which(blast.key.plasmid.PAM[,1] %in% rownames(subset(plasmid.PAM, plasmid.PAM[,which(colnames(plasmid.PAM)[] == locus)] != "0")), arr.ind = TRUE),2] <- locus
+    plasmid.PAM.tmp <- subset(plasmid.PAM, plasmid.PAM[,which(colnames(plasmid.PAM)[] == locus)] == "0")
+#
+   if(ncol(plasmid.PAM.tmp) > 0){
+	plasmid.n0.PAM <- plasmid.PAM.tmp[,which(colSums(plasmid.PAM.tmp)[] != 0, arr.ind = TRUE)]
+	} else {
+	plasmid.n0.PAM <- matrix(0, ncol = 2, nrow = 2)
+	}
+#    plasmid.n0.PAM <- plasmid.PAM.tmp[,which(colSums(plasmid.PAM.tmp)[] != 0, arr.ind = TRUE)]
+    plasmid.PAM <- plasmid.n0.PAM
+}
+
+
+# Clean up the data, reconstruct the unique ID, import plasmid length and orientation of starting loci
+# Edit 4-26
+blast.key.plasmid.PAM <- blast.key.plasmid.PAM[which(blast.key.plasmid.PAM[,2] != 0, arr.ind = TRUE),]
+blast.key.plasmid.PAM <- droplevels(blast.key.plasmid.PAM)
+blast.key.plasmid.PAM[,3] <- paste(blast.key.plasmid.PAM[,1], blast.key.plasmid.PAM[,2], sep = "_")
+for(i in 1:nrow(blast.key.plasmid.PAM)){blast.key.plasmid.PAM[i,4] <- df.dataset.hits[which(blast.key.plasmid.PAM[i,3] == df.dataset.hits[,6])[1],9]}
+for(i in 1:nrow(blast.key.plasmid.PAM)){blast.key.plasmid.PAM[i,5] <- df.dataset.hits[which(blast.key.plasmid.PAM[i,3] == df.dataset.hits[,6])[1],13]}
+for(i in 1:nrow(blast.key.plasmid.PAM)){if(blast.key.plasmid.PAM[i,5] == "minus"){
+blast.key.plasmid.PAM[i,4] <- ((blast.key.plasmid.PAM[i,4]) + 1)
+} else {
+x <- 0
+}
+}
+
+# Write a list of the plasmids to be extracted
+write.table(blast.key.plasmid.PAM[,1], paste0("./",selected.plasmid,"/fragments/plasmid_list"), quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+
+# Write a table of the loci and position data used to index the plasmids specified above
+write.table(blast.key.plasmid.PAM[,c(1,4,5)], paste0("./",selected.plasmid,"/fragments/plasmid_index"), quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+
+# Save the indexing loci IDs to index plasmid sequences... in the future!
+write.table(loci.count[which(loci.count != 0, arr.ind = TRUE)], paste0("./",selected.plasmid,"/fragments/indexing.loci"), col.name = FALSE, row.name = FALSE, quote = FALSE)
+  
+  save.image(paste0("./",selected.plasmid,"/data/Step4.Rdata"))

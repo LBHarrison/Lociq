@@ -1,0 +1,694 @@
+#!/usr/bin/env Rscript
+
+args = commandArgs(trailingOnly=TRUE)
+selected.plasmid <- as.character(args)[1]
+
+# load previous step into memory
+load(paste0("./",selected.plasmid,"/data/Step4.Rdata")) 
+
+# Import dataset and annotate
+indexed_val <- read.delim(paste0("./",selected.plasmid,"/analysis/indexed_val.hits"), header=FALSE)
+df.indexed.hits <- as.data.frame(indexed_val)
+df.indexed.hits[,13] <- rep(0, nrow(df.indexed.hits))
+colnames(df.indexed.hits) <- colnames(df.dataset.hits)
+colnames(df.indexed.hits)[1:2] <- c("loci", "plasmid")
+df.indexed.hits[which(df.indexed.hits$`sequence.start` < df.indexed.hits$`sequence.end`),13] <- 'plus'
+df.indexed.hits[which(df.indexed.hits$`sequence.start` > df.indexed.hits$`sequence.end`),13] <- 'minus'
+indexed.coords <- as.data.frame(paste(df.indexed.hits[,2], paste(with(df.indexed.hits,pmin(sequence.start, sequence.end)),with(df.indexed.hits,pmax(sequence.start, sequence.end)), sep = "-"), df.indexed.hits[,13], sep = " "))
+df.indexed.hits[,6] <- paste(df.indexed.hits[,2], df.indexed.hits[,1], sep = "_")
+
+
+
+
+
+###### START INITIAL LOCI SEQUENCE ID ASSIGNMENT ##########################
+
+# Cycle through the data to extract sequence position data for each locus for the purpose of comparison and sequence typing
+
+for(i in 1:length(levels(factor(df.indexed.hits[,1])))){
+
+# Identify the current locus being identified
+loci.iteration <- levels(factor(df.indexed.hits[,1]))[i]
+
+# Generate a dataframe that contains the plasmid IDs, coordinates and orientation that bastdbcmd will use to extract the sequences
+loci.temp <- as.data.frame(subset(indexed.coords[,1], df.indexed.hits[,1] == loci.iteration))
+
+#create the input file for blastdbcmd command
+write.table(as.character(loci.temp[,1]), paste0("./",selected.plasmid,"/analysis/batcher"), sep = "\t", col.name = FALSE, row.name = FALSE, quote = FALSE)
+
+#execute blastdbcmd from system
+system(paste0("./lociq.script -a ./",selected.plasmid,"/analysis/"), wait = TRUE)
+
+#import seqs.4 as results of blastdbcmd on subsetted data
+seqs.4 <- read.delim(paste0("./",selected.plasmid,"/analysis/seqs.4.R"), header=FALSE)
+
+#Assign numeric loci identifiers for each sequence.  All instances of a specific sequence will have the same number
+seqs.4[,3] <- as.numeric(factor(seqs.4[,2]))
+
+# Cleanup
+system(paste0("rm ./",selected.plasmid,"/analysis/seqs.4.R"))
+
+#Add length value to loci
+seqs.4[,4] <- as.numeric(nchar(as.character(seqs.4[,2])))
+
+#Add unique plasmid-loci ID
+seqs.4[,5] <- paste(seqs.4[,1], loci.iteration, sep = "_")
+seqs.4[,6] <- loci.iteration
+colnames(seqs.4)[] <- c("plasmid","sequence","loci.variant","loci.length","unique","loci")
+seqs.4[,1] <- as.character(seqs.4[,1])
+seqs.4[,2] <- as.character(seqs.4[,2])
+# Merge the datasets to create loci/plasmid/variant combinations
+# A quick decision tree loop based on whether this is the first iteration or not
+k <- 0
+ifelse(i == 1, seq.list <- seqs.4, seq.list <- rbind(seq.list, seqs.4))
+}
+
+df.merge.indexed <- merge(df.indexed.hits, seq.list, by = c('unique', 'plasmid', 'loci'), all = TRUE)
+df.merge.indexed[,17] <- abs(df.merge.indexed[,10] - df.merge.indexed[,9]) + 1
+df.merge.indexed <- df.merge.indexed[which(df.merge.indexed[,17] == df.merge.indexed$loci.length, arr.ind = TRUE),1:16]
+
+loci.variability <- as.data.frame.matrix(table(df.merge.indexed$loci, df.merge.indexed$loci.variant))
+
+# Upon completion of the above, all loci should have a sequence type ID
+loci.complete <- df.merge.indexed[,c(2,14,3,9,10,15,16,13)]
+loci.complete[,9] <- rep(0, nrow(loci.complete))
+colnames(loci.complete)[9] <- "fragment"
+
+###### END INITIAL LOCI SEQUENCE ID ASSIGNMENT ##########################
+
+
+
+###### BEGIN FRAGMENT STRUCTURE TYPING ##################################
+
+# Load 'tidyr' library
+library(tidyr)
+
+# Now we import the fragment/loci index file from the previous stage
+
+loci_fragment <- read.csv(paste0("./",selected.plasmid,"/fragments/loci.index"), stringsAsFactors=FALSE)
+for(i in 1:nrow(loci_fragment)){loci.complete[which(loci.complete$loci == loci_fragment[i,1], arr.ind = TRUE),9] <- loci_fragment[i,2]}
+
+
+## This section generates a table that parses out fragment IDs in loci order in number (e.g. 3,3,1,1,1,1,1,2,2,2,2)
+## Also generates the structure type for the plasmid || However this may be modified in the future, depending on the results from the annotation table
+
+# Creating an empty space for the plasmid fragment order
+df.plasmid.fragment.order <- as.data.frame(matrix(0, ncol = max(table(loci.complete[,1])), nrow = length(levels(factor(loci.complete[,1])))))
+df.plasmid.loci.order <- as.data.frame(matrix(0, ncol = max(table(loci.complete[,1])), nrow = length(levels(factor(loci.complete[,1])))))
+
+# Generate a table showing the order of loci on each plasmid
+for(i in 1:length(levels(factor(loci.complete[,1])))){
+     current.plasmid.fragments <- subset(loci.complete, loci.complete[,1] == levels(factor(loci.complete[,1]))[i])[order(subset(loci.complete, loci.complete[,1] == levels(factor(loci.complete[,1]))[i])[,4]),9]
+df.plasmid.fragment.order[i,1:length(current.plasmid.fragments)] <- current.plasmid.fragments
+rownames(df.plasmid.fragment.order)[i] <- levels(factor(loci.complete[,1]))[i]
+ }
+
+# Generate a table showing the order of loci fragments on each plasmid  (e.g. if there are 3 loci on fragment 8, the entry on the row will be '8,8,8'
+for(i in 1:length(levels(factor(loci.complete[,1])))){
+    current.plasmid.loci <- subset(loci.complete, loci.complete[,1] == levels(factor(loci.complete[,1]))[i])[order(subset(loci.complete, loci.complete[,1] == levels(factor(loci.complete[,1]))[i])[,4]),3]
+    ifelse(length(current.plasmid.loci) > 1, df.plasmid.loci.order[i,1:length(current.plasmid.loci)] <- current.plasmid.loci, df.plasmid.loci.order[i,1] <- as.character(current.plasmid.loci))
+    rownames(df.plasmid.loci.order)[i] <- levels(factor(loci.complete[,1]))[i]
+}
+
+# convert the plasmid index to a numeric matrix of loci
+df.plasmid.loci.order.num <- df.plasmid.loci.order
+for(i in 1:nrow(df.loci.ind)){df.plasmid.loci.order.num[which(df.plasmid.loci.order.num == rownames(df.loci.ind)[i], arr.ind = TRUE)] <- i}
+
+
+# Reduce the duplicate fragment entries to just show the fragment order)
+df.condense.frag.order <- as.data.frame(matrix(0, ncol = (2*nrow(loci_fragment)), nrow = nrow(df.plasmid.fragment.order)))
+
+for(i in 1:dim(df.plasmid.fragment.order)[1]){
+    current.frag.order <- c(as.character(rle(df.plasmid.fragment.order[i,])$values))
+    df.condense.frag.order[i,1:length(current.frag.order)] <- current.frag.order
+}
+
+
+# Convert the Values to Numeric
+df.condense.frag.order[] <- lapply(df.condense.frag.order, function(x) as.numeric(as.character(x)))
+
+# Remove zero-sum columns
+df.condense.frag.order <- df.condense.frag.order[,which(colSums(df.condense.frag.order) != 0, arr.ind = TRUE)]
+
+# Assign unique numeric ID to each fragment pattern
+df.condense.frag.order[,ncol(df.condense.frag.order)+1] <- as.numeric(factor(as.data.frame(unite(df.condense.frag.order, "united", sep = " "))[,1]))
+
+rownames(df.condense.frag.order)[] <- rownames(df.plasmid.fragment.order)
+
+###### END FRAGMENT STRUCTURE TYPING ###################################
+
+
+###### BEGIN ADDITION OF AMR ANNOTATION #################################
+
+# Import AMR data and label
+indexed_AMR <- read.delim(paste0("./",selected.plasmid,"/analysis/AMRFinder.hits"), stringsAsFactors=FALSE)
+colnames(indexed_AMR)[c(2,3,4,5,6,9)] <- c("plasmid", "sequence.start", "sequence.end", "orientation", "loci", "loci.variant")
+
+# Combine AMR with loci data
+plasmid.loci.amr <- rbind(indexed_AMR[,c(2, 3, 4, 5, 6, 9)], loci.complete[,c(1, 4, 5, 8, 3, 6)])
+plasmid.AMR <- indexed_AMR[,c(2, 3, 4, 5, 6, 9)]
+
+
+# Empty table for loci / amr position data
+loci.amr.map <- as.data.frame(matrix(0, nrow = length(table(plasmid.loci.amr[,1])), ncol = max(table(plasmid.loci.amr[,1]))))
+
+# Populate the table with loci and AMR genes in order
+for(i in 1:length(table(plasmid.loci.amr[,1]))){
+current.map <- subset(plasmid.loci.amr, plasmid.loci.amr[,1] == levels(factor(plasmid.loci.amr[,1]))[i])[order(subset(plasmid.loci.amr, plasmid.loci.amr[,1] == levels(factor(plasmid.loci.amr[,1]))[i])[,2]),5]
+loci.amr.map[i,1:length(current.map)] <- as.character(current.map)
+rownames(loci.amr.map)[i] <- levels(factor(plasmid.loci.amr[,1]))[i]
+}
+
+# Convert the loci names to their corresponding fragment ID
+frag.amr.long <- loci.amr.map
+
+for(i in 1:nrow(loci_fragment)){
+frag.amr.long[which(loci.amr.map == loci_fragment[i,1], arr.ind = TRUE)] <- loci_fragment[i,2]
+}
+
+
+# Now to condense the fragments, similar to before
+df.condense.loci.amr <- as.data.frame(matrix(0, ncol = (2*nrow(loci_fragment)), nrow = nrow(frag.amr.long)))
+
+for(i in 1:dim(df.plasmid.fragment.order)[1]){
+    current.amr.order <- c(as.character(rle(frag.amr.long[i,])$values))
+    df.condense.loci.amr[i,1:length(current.amr.order)] <- current.amr.order
+    rownames(df.condense.loci.amr)[i] <- rownames(frag.amr.long)[i]
+}
+
+
+df.condense.loci.amr <- df.condense.loci.amr[,-(which(lapply(df.condense.loci.amr, class) == "numeric", arr.ind = TRUE))]
+
+if(length(which(rownames(frag.amr.long) %in% levels(factor(loci.complete$plasmid)) == FALSE, arr.ind = TRUE)) == 0){
+frag.amr.long <- frag.amr.long
+} else {
+frag.amr.long <- frag.amr.long[-(which(rownames(frag.amr.long) %in% levels(factor(loci.complete$plasmid)) == FALSE, arr.ind = TRUE)),]
+}
+
+###### END ADDITION OF AMR ANNOTATION ###################################
+
+
+
+# Required values: 
+#	loci.complete - complete loci coordinate info for the entire dataset
+#	frag.amr.long - a matrix containing the combined fragment and AMR patterns for each plasmid, in long form (not condensed)
+#	plasmid.AMR - a dataframe of plasmid AMR data containing name, coordinate info, orientation and the AMR type (AMR/STRESS/VIRULENCE)
+#	current.k
+
+df.loci.pattern.matrix <- matrix(0, nrow = 1, ncol = 3)
+colnames(df.loci.pattern.matrix) <- c("Plasmid", "Fragment_ID", "Loci_Order")
+cumulative.AMR <- matrix(0, nrow = 1, ncol = 12)
+cumulative.loci <- matrix(0, nrow = 1, ncol = 12)
+cumulative.plasmid <- matrix(0, nrow = 1, ncol = 10)
+cumulative.fragment.ST <- matrix(0, nrow = 1, ncol = 4)
+
+
+for( current.k in 1:dim(frag.amr.long)[1]){
+# for( current.k in 1:1)
+{
+
+CHECK <- 1
+
+# Extract data from the plasmid of interest as designated by the variable current.k
+current.loci.subset <- subset(loci.complete, loci.complete[,1] == rownames(frag.amr.long)[current.k])[,c(1,3,4,5,6,8,7,9)]
+CHECK <- 2
+
+# Extract corresponding AMR data
+current.AMR <- subset(plasmid.AMR, plasmid.AMR[,1] == rownames(frag.amr.long)[current.k])[,c(1,5,2,3,6,4)]
+CHECK <- 3
+
+# Determine the length of each AMR gene
+# numeric conversion 5-24-2022
+current.AMR[,3] <- as.numeric(current.AMR[,3])
+current.AMR[,4] <- as.numeric(current.AMR[,4])
+current.AMR[,7] <- apply(current.AMR[,3:4],1,function(x) max(x)-min(x))
+CHECK <- 4
+
+# Assign a fragment ID to make the data structure compatible with loci info
+current.AMR[,8] <- rep("annotation", dim(current.AMR)[1])
+colnames(current.AMR) <- colnames(current.loci.subset)
+CHECK <- 5
+
+# Merge the datasets
+current.complete.subset <- rbind(current.loci.subset, current.AMR)
+CHECK <- 6
+
+# Organize rows in order (as read from plasmid)
+current.complete.subset <- current.complete.subset[order(current.complete.subset$sequence.start),]
+current.loci.subset <- current.loci.subset[order(current.loci.subset$sequence.start),]
+CHECK <- 7
+
+# Create room for future analyses
+current.loci.subset[,9] <- rep(0, dim(current.loci.subset)[1])
+current.loci.subset[,10] <- rep(0, dim(current.loci.subset)[1])
+CHECK <- 8
+
+# Initialize the starting cell
+current.loci.subset[1,9] <- 1
+CHECK <- 9
+
+# Assign ordinal values to the plasmid fragments based only on differing fragment IDs
+for(i in 2:dim(current.loci.subset)[1]){ 
+ ifelse(current.loci.subset[i,8] != current.loci.subset[i-1,8], current.loci.subset[i,9] <- current.loci.subset[i-1,9] + 1, current.loci.subset[i,9] <- current.loci.subset[i-1,9])
+ }
+CHECK <- 10
+
+# ifelse(current.loci.subset[67,8] != current.loci.subset[66,8], current.loci.subset[67,9] <- current.loci.subset[66,9] + 1, current.loci.subset[67,9] <- current.loci.subset[66,9])
+
+
+# Now, investigate neighboring loci within a fragment to ensure they are below 2x our threshold value of 50bp.  If they are, split the fragment into separate pieces
+
+p <- 0
+r <- 0
+current.loci.subset[1,10] <- 1
+ if(dim(current.loci.subset)[1] > 1){
+ for(i in 2:dim(current.loci.subset)[1]){
+	if((current.loci.subset[i,8] == current.loci.subset[i-1,8]) && (min(current.loci.subset[i,3:4]) - max(current.loci.subset[i-1,3:4]) > (2*i.threshold) )){
+#	if((current.loci.subset[i,8] == current.loci.subset[i-1,8]) && (min(current.loci.subset[i,3:4]) - max(current.loci.subset[i-1,3:4]) > (2*500) )){
+		r <- p + 1
+	}
+	current.loci.subset[i,10] <- current.loci.subset[i,9] + r
+		p <- r
+ }
+}
+
+
+CHECK <- 11
+
+
+# Generate space to collect values for the report
+
+current.loci.subset[,11] <- rep(0, nrow(current.loci.subset))
+current.loci.subset[,12] <- rep(0, nrow(current.loci.subset))
+
+CHECK <- 111
+
+if(nrow(current.loci.subset) == 1){
+	current.loci.subset[1,12] <- 1
+	}
+	else
+	{
+	for(i in 1:(nrow(current.loci.subset) - 1)){current.loci.subset[i,12] <- (min(current.loci.subset[i+1,3:4]) - max(current.loci.subset[i,3:4]))}
+	}
+
+# ifelse(nrow(current.loci.subset) == 1, current.loci.subset[1,12] <- 1, for(i in 1:(nrow(current.loci.subset) - 1)){current.loci.subset[i,12] <- (min(current.loci.subset[i+1,3:4]) - max(current.loci.subset[i,3:4]))})
+
+# for(i in 1:(nrow(current.loci.subset) - 1)){current.loci.subset[i,12] <- (min(current.loci.subset[i+1,3:4]) - max(current.loci.subset[i,3:4]))}
+
+
+
+CHECK <- 112
+
+# The number of rows needs to equal the number of fragments in current.loci.subset
+plasmid.info.table <- matrix(0, ncol = 2, nrow = max(current.loci.subset[,10]))
+plasmid.results <- as.data.frame(matrix(0, ncol = 8, nrow = max(current.loci.subset[,10])))
+colnames(plasmid.results)[] <- c("Fragment_ID", "Loci_count", "Loci_composition", "Distance_between_fragments", "AMR_between_fragments", "Fragment_start", "Fragment_end", "Fragment_size")
+
+CHECK <- 12
+
+# Input the plasmid fragment IDs in order from current.loci.subset
+plasmid.results[,1] <-current.loci.subset[match(unique(current.loci.subset$V10), current.loci.subset$V10),8]
+CHECK <- 13
+
+# Count the loci on each fragment
+plasmid.results[,2] <- rowSums(table(current.loci.subset$V10, current.loci.subset$fragment))
+CHECK <- 14
+
+# Initialize values in plasmid.info.table
+plasmid.info.table[1,1] <- 1
+plasmid.info.table[1,2] <- plasmid.results[1,2]
+CHECK <- 15
+
+# Walk through the coordinate table, using a running total of loci to dictate position
+
+if(dim(plasmid.info.table)[1] > 1){
+for(i in 2:dim(plasmid.info.table)[1]){
+plasmid.info.table[i,1] <- (plasmid.info.table[(i-1),2] + 1)
+plasmid.info.table[i,2] <- plasmid.info.table[i,1] + plasmid.results[i,2] - 1
+}}
+
+CHECK <- 16
+
+# From the above subset, extract the relevant information
+for(i in 1:dim(plasmid.results)[1]){
+CHECK <- 161
+plasmid.results[i,3] <- toString(paste(current.loci.subset[,2], current.loci.subset[,5], sep = "_var.")[plasmid.info.table[i,1]:plasmid.info.table[i,2]])
+CHECK <- 162
+plasmid.results[i,6] <- min(current.loci.subset[plasmid.info.table[i,1],3:4])
+CHECK <- 163
+plasmid.results[i,7] <- max(current.loci.subset[plasmid.info.table[i,2],3:4])
+CHECK <- 164
+plasmid.results[i,8] <- plasmid.results[i,7] - plasmid.results[i,6]
+}
+plasmid.results[,9] <- rep(rownames(frag.amr.long)[current.k], dim(plasmid.results)[1])
+CHECK <- 165
+plasmid.results[,10] <- seq(from = 1, to = dim(plasmid.results)[1], by = 1)
+CHECK <- 17
+
+# Establish inter-fragment distance.  May need to import plasmid length info from a prior step
+for(i in 1:(dim(plasmid.results)[1] - 1)){
+plasmid.results[i,4] <- plasmid.results[i+1,6] - plasmid.results[i,7]
+}
+CHECK <- 18
+
+# Then we get to the working loop
+current.loci.pattern.matrix <- matrix(0, nrow = nrow(plasmid.results), ncol = 3)
+colnames(current.loci.pattern.matrix) <- c("Plasmid", "Fragment_ID", "Loci_Order")
+
+current.loci.pattern.matrix[,1] <- plasmid.results[,9]
+current.loci.pattern.matrix[,2] <- plasmid.results[,1]
+
+for(loci.pattern in 1:nrow(plasmid.results)){
+
+if(loci.pattern == 1){
+current.loci.pattern.matrix[loci.pattern,3] <- paste(df.plasmid.loci.order.num[which(rownames(df.plasmid.loci.order.num)==plasmid.results[1,9], arr.ind = TRUE),(1:sum(plasmid.results[1:loci.pattern,2]))], collapse = " ")
+} else {
+current.loci.pattern.matrix[loci.pattern,3] <- paste(df.plasmid.loci.order.num[which(rownames(df.plasmid.loci.order.num)==plasmid.results[1,9], arr.ind = TRUE),(sum(plasmid.results[1:(loci.pattern - 1),2])+1):sum(plasmid.results[1:loci.pattern,2])], collapse = " ")
+}
+
+}
+
+df.loci.pattern.matrix <- rbind.data.frame(df.loci.pattern.matrix, current.loci.pattern.matrix)
+
+
+# Fragment Sequence Typing
+
+current.fragment.ST <- as.data.frame(matrix(0, nrow=length(unique(current.loci.subset[,10])), ncol = 4))
+current.fragment.subset <- current.loci.subset[,c(1,2,5,8,10)]
+for(i in 1:nrow(current.fragment.subset)){current.fragment.subset[i,2] <- match(current.fragment.subset[i,2], rownames(df.loci.ind))}
+current.fragment.subset[,3] <- paste0(current.fragment.subset[,2], ".", current.fragment.subset[,3])
+current.fragment.subset <- current.fragment.subset[order(current.fragment.subset[,3]),]
+
+current.fragment.ST[,1] <- current.fragment.subset[1,1]
+for(i in 1:nrow(current.fragment.ST)){
+current.fragment.ST[i,2] <- subset(current.fragment.subset, current.fragment.subset[,5] == i)[1,4]
+current.fragment.ST[i,3] <- paste0(subset(current.fragment.subset, current.fragment.subset[,5] == i)[,3], collapse = " ")
+}
+
+cumulative.fragment.ST <- rbind(cumulative.fragment.ST, current.fragment.ST)
+
+
+# Assign AMR annotations
+for(i in 1:(dim(plasmid.results)[1] - 1)){
+    plasmid.results[i,5] <- toString(paste(subset(current.AMR[,2], current.AMR[,3] > plasmid.results[i,7] & current.AMR[,3] < plasmid.results[i+1,6]), sep = ", "))
+}
+
+# ADDENDUM 2-11
+colnames(cumulative.plasmid) <- colnames(plasmid.results)
+cumulative.plasmid <- rbind(cumulative.plasmid, plasmid.results)
+
+CHECK <- 19
+
+# Modify the AMR info for the current plasmid to allow room for location information
+current.AMR[,9] <- rep(0, dim(current.AMR)[1])
+current.AMR[,10] <- rep(0, dim(current.AMR)[1]) 
+current.AMR[,11] <- rep(0, dim(current.AMR)[1])
+current.AMR[,12] <- rep(0, dim(current.AMR)[1])
+CHECK <- 20
+
+# Find the upstream fragment by comparing the AMR loci start to the closest value below that value that is represented in the fragment end column
+current.AMR[,9] <- plasmid.results[match(apply(as.matrix(current.AMR[,3]), 1, function(x) max(plasmid.results[plasmid.results[,7] < x,7])), plasmid.results[,7] ),1]
+CHECK <- 21
+
+# Find the downstream fragment in a similar fashion
+current.AMR[,10] <- plasmid.results[match(apply(as.matrix(current.AMR[,4]), 1, function(x) min(plasmid.results[plasmid.results[,6] > x,6])), plasmid.results[,6] ),1]
+CHECK <- 22
+
+# Obtain the distance to the upstream fragment by subtraction AMR start from fragment end
+current.AMR[,11] <- current.AMR[,3] - apply(as.matrix(current.AMR[,3]), 1, function(x) max(plasmid.results[plasmid.results[,7] < x,7]))
+CHECK <- 23
+
+# Likewise for downstream fragment distance
+current.AMR[,12] <- abs(current.AMR[,4] - apply(as.matrix(current.AMR[,4]), 1, function(x) min(plasmid.results[plasmid.results[,6] > x,6])))
+colnames(current.AMR)[9:12] <- c("upstream_fragment", "downstream_fragment", "bp_to_upstream", "bp_to_downstream")
+CHECK <- 24
+
+current.loci.subset[,11] <- paste(current.loci.subset[,2], current.loci.subset[,5], sep = "_var")
+colnames(current.loci.subset)[9:11] <- c("fragment_order_by_ID", "final_fragment_order", "locus_and_variant")
+
+# Addendum 2-11
+colnames(cumulative.loci) <- colnames(current.loci.subset)
+cumulative.loci <- rbind(cumulative.loci, current.loci.subset)
+
+
+# Addendum for AMR Analysis
+#
+colnames(cumulative.AMR) <- colnames(current.AMR)
+
+CHECK <- 25
+
+cumulative.AMR <- rbind(cumulative.AMR, current.AMR)
+
+}
+
+}
+
+# Assign plasmid sequence types
+
+loci.complete.num <- loci.complete[,c(1,3,6)]
+
+for(i in 1:nrow(df.loci.ind)){loci.complete.num[which(loci.complete.num == rownames(df.loci.ind)[i], arr.ind = TRUE)] <- i}
+
+loci.complete.num[,4] <- paste0(loci.complete.num[,2], ".", loci.complete.num[,3])
+
+colnames(loci.complete.num)[4] <- "loci_variant"
+
+df.loci.plasmid.definitions <- as.data.frame(matrix(0, ncol = 4, nrow = length(levels(factor(loci.complete.num[,1])))))
+
+colnames(df.loci.plasmid.definitions) <- c("plasmid", "loci_seqeunce_order", "loci_typing_order", "plasmid_ST")
+
+for(i in 1:nrow(df.loci.plasmid.definitions)){
+	df.loci.plasmid.definitions[i,1] <- levels(factor(loci.complete.num[,1]))[i]
+	df.loci.plasmid.definitions[i,2] <- paste0(subset(loci.complete.num, loci.complete.num[,1] == levels(factor(loci.complete.num[,1]))[i])[,4], collapse = " ")
+	df.loci.plasmid.definitions[i,3] <- paste0(subset(loci.complete.num, loci.complete.num[,1] == levels(factor(loci.complete.num[,1]))[i])[,4][order(as.numeric(subset(loci.complete.num, loci.complete.num[,1] == levels(factor(loci.complete.num[,1]))[i])[,4]))], collapse = " ")
+	}
+
+df.loci.plasmid.definitions[,4] <- as.numeric(factor(df.loci.plasmid.definitions[,3]))
+
+
+# Create loci typing tables
+
+# Generate unique IDs for the loci patterns
+# First establish the loci patterns for the individual fragments
+df.loci.pattern.matrix[,4] <- rep(0, nrow(df.loci.pattern.matrix))
+df.loci.pattern.matrix[,5] <- rep(0, nrow(df.loci.pattern.matrix))
+colnames(df.loci.pattern.matrix)[c(4,5)] <- c("Pattern_ID","Fragment_Pattern_ID")
+for(i in 1:max(as.numeric(df.loci.pattern.matrix$Fragment_ID))){
+	typing.fragment <- unique(subset(df.loci.pattern.matrix, df.loci.pattern.matrix[,2] == i)[,3])
+		for(j in 1:length(typing.fragment)){
+			df.loci.pattern.matrix[which(df.loci.pattern.matrix[,3] == typing.fragment[j], arr.ind = TRUE),4] <- j
+		}
+	}
+
+df.loci.pattern.matrix[,5] <- paste0(df.loci.pattern.matrix[,2], ".", df.loci.pattern.matrix[,4])
+
+# Create a reference file for loci patterns against plasmid type
+loci.fragment.pattern.index <- unique(df.loci.pattern.matrix[,2:4])[order(unique(df.loci.pattern.matrix[,2:4])[,1]),]
+
+
+
+# Next, establish the overall pattern of loci on the plasmids by the ordered arrangement of the fragments
+# This will allow us to distinguish between rearrangments that affect loci order within fragments and those that don't
+
+df.condense.loci.fragment.pattern <- as.data.frame(matrix(0, ncol = 3, length(levels(factor(df.loci.pattern.matrix[,1])))))
+
+for(i in 1:nrow(df.condense.loci.fragment.pattern)){
+	df.condense.loci.fragment.pattern[i,1] <- levels(factor(df.loci.pattern.matrix[,1]))[i]
+	df.condense.loci.fragment.pattern[i,2] <- paste(t(subset(df.loci.pattern.matrix, df.loci.pattern.matrix[,1] == levels(factor(df.loci.pattern.matrix[,1]))[i])[order(subset(df.loci.pattern.matrix, df.loci.pattern.matrix[,1] == 	levels(factor(df.loci.pattern.matrix[,1]))[i])[,5]),5]), collapse = " ")
+	}
+
+# Assign the fragment-pattern ID for the entire plasmid
+df.condense.loci.fragment.pattern[,3] <- as.numeric(factor(df.condense.loci.fragment.pattern[,2]))
+
+# Create a reference file for this fragment type
+df.fragment.pattern.index <- unique(df.condense.loci.fragment.pattern[,2:3])[order(unique(df.condense.loci.fragment.pattern[,2:3])[,1]),]
+colnames(df.fragment.pattern.index) <- c("Plasmid_Fragment_Pattern", "Plasmid_Fragment_Pattern_ID")
+
+# Data Cleanup
+cumulative.plasmid <- cumulative.plasmid[-(which(cumulative.plasmid[,1] == 0, arr.ind = TRUE)),]
+cumulative.AMR <- cumulative.AMR[-(which(cumulative.AMR[,1] == 0, arr.ind = TRUE)),]
+df.loci.pattern.matrix <- df.loci.pattern.matrix[-(which(df.loci.pattern.matrix[,1] == 0, arr.ind = TRUE)),]
+cumulative.fragment.ST <- cumulative.fragment.ST[-(which(cumulative.fragment.ST[,1] == 0, arr.ind = TRUE)),]
+
+colnames(cumulative.plasmid)[c(9, 10)] <- c("Molecule", "Fragment_order")
+colnames(cumulative.fragment.ST) <- c("plasmid", "Fragment_ID", "Loci_Allele", "Fragment_ST")
+
+# Create a reference file for fragment sequence type
+df.fragment.ST.index <- as.data.frame(matrix(0, nrow = 1, ncol = 2))
+colnames(df.fragment.ST.index) <- c("Loci_Allele","Fragment_ST")
+
+for(i in 1:length(unique(cumulative.fragment.ST[,2]))){
+current.indexing.fragment.ST <- unique(subset(cumulative.fragment.ST, cumulative.fragment.ST[,2] == i)[,c(3,4)])[order(unique(subset(cumulative.fragment.ST, cumulative.fragment.ST[,2] == i)[,3])),]
+current.indexing.fragment.ST[,2] <- paste0(i, ".", 1:(nrow(current.indexing.fragment.ST)))
+df.fragment.ST.index <- rbind(df.fragment.ST.index, current.indexing.fragment.ST)
+if(i == 1){
+df.fragment.ST.index <- df.fragment.ST.index[-(which(df.fragment.ST.index[,1] == 0, arr.ind = TRUE)),]
+}else{
+x <- 0
+}
+}
+
+
+df.condense.loci.fragment.pattern <- df.condense.loci.fragment.pattern[-(which(df.condense.loci.fragment.pattern[,1] == 0, arr.ind = TRUE)),]
+
+rownames(df.fragment.ST.index) <- 1:(nrow(df.fragment.ST.index))
+
+# Annotate the cumulative fragment ST table with the unique IDs
+
+for(i in 1:nrow(df.fragment.ST.index)){cumulative.fragment.ST[which(cumulative.fragment.ST[,3] == df.fragment.ST.index[i,1]),4] <- df.fragment.ST.index[i,2]}
+
+df.plasmids.typed <- as.data.frame(matrix(0, nrow=length(levels(factor(df.condense.loci.fragment.pattern[,1]))), ncol = 7))
+for(o in 1:length(levels(factor(df.condense.loci.fragment.pattern[,1])))){
+	df.plasmids.typed[o,1] <-  levels(factor(df.condense.loci.fragment.pattern[,1]))[o]
+	df.plasmids.typed[o,2] <- selected.plasmid
+	df.plasmids.typed[o,3] <- subset(df.condense.frag.order, rownames(df.condense.frag.order) == levels(factor(df.condense.loci.fragment.pattern[,1]))[o])[,ncol(df.condense.frag.order)]
+	df.plasmids.typed[o,4] <- subset(df.condense.loci.fragment.pattern, df.condense.loci.fragment.pattern[,1] == levels(factor(df.condense.loci.fragment.pattern[,1]))[o])[,ncol(df.condense.loci.fragment.pattern)]
+	df.plasmids.typed[o,5] <- subset(df.loci.plasmid.definitions, df.loci.plasmid.definitions[,1] == levels(factor(df.condense.loci.fragment.pattern[,1]))[o])[,4]
+	df.plasmids.typed[o,6] <- paste0(cumulative.fragment.ST[which(cumulative.fragment.ST[,1] == levels(factor(df.condense.loci.fragment.pattern[,1]))[o]),4], collapse = ", ")
+	df.plasmids.typed[o,7] <- paste0(cumulative.plasmid[which(cumulative.plasmid$Molecule == levels(factor(df.condense.loci.fragment.pattern[,1]))[o], arr.ind = TRUE),4][-(length( cumulative.plasmid[which(cumulative.plasmid$Molecule == levels(factor(df.condense.loci.fragment.pattern[,1]))[o], arr.ind = TRUE),4]))], collapse = ", ")
+}
+
+colnames(df.plasmids.typed) <- c("subject", "typing_plasmid", "fragment_pattern", "loci_pattern","plasmid_ST", "fragment_ST", "InterFragment_distance")
+
+# Create a reference file for fragment sequence type
+# Hold up. need to reorder everything, the following will return the fragment ST in numeric order, this way the plasmid ST won't be disrupted by structural changes
+# paste0(as.numeric(cumulative.fragment.ST[which(cumulative.fragment.ST[,1] == levels(factor(df.condense.loci.fragment.pattern[,1]))[o]),4])[order(as.numeric(cumulative.fragment.ST[which(cumulative.fragment.ST[,1] == levels(factor(df.condense.loci.fragment.pattern[,1]))[o]),4]))], collapse = ", ")
+
+
+# df.plasmid.ST.index <- as.data.frame(matrix(0, nrow = length(unique(df.plasmids.typed[,5])), ncol = 2))
+# colnames(df.fragment.ST.index) <- c("Loci_Allele","Fragment_ST")
+# df.plasmid.ST.index[,1] <- unique(df.plasmids.typed[,5])[order(unique(df.plasmids.typed[,5]))]
+# df.plasmid.ST.index[,2] <- 1:(length(unique(df.plasmids.typed[,5])))
+
+
+# df.plasmid.ST.index.pre <- as.data.frame(matrix(0, nrow = nrow(df.plasmids.typed), ncol = 2))
+
+# for(i in 1:length(levels(factor(df.condense.loci.fragment.pattern[,1])))){
+# df.plasmid.ST.index.pre[i,1] <- levels(factor(df.condense.loci.fragment.pattern[,1]))[i]
+# df.plasmid.ST.index.pre[i,2] <- paste0(as.numeric(cumulative.fragment.ST[which(cumulative.fragment.ST[,1] == levels(factor(df.condense.loci.fragment.pattern[,1]))[i]),4])[order(as.numeric(cumulative.fragment.ST[which(cumulative.fragment.ST[,1] == levels(factor(df.condense.loci.fragment.pattern[,1]))[i]),4]))], collapse = ", ")
+# }
+
+# df.plasmid.ST.index.pre[,3] <- as.numeric(factor(df.plasmid.ST.index.pre[,2]))
+# df.plasmid.ST.index <- unique(df.plasmid.ST.index.pre[,2:3])
+# df.plasmid.ST.index <- df.plasmid.ST.index[order(as.numeric(df.plasmid.ST.index[,2])),]
+# rownames(df.plasmid.ST.index) <- 1:nrow(df.plasmid.ST.index)
+
+# df.plasmids.typed[,7] <- rep(0, nrow(df.plasmids.typed))
+
+# for(i in 1:nrow(df.plasmid.ST.index)){
+#	df.plasmids.typed[which(df.plasmids.typed[,5] == df.plasmid.ST.index[i,1], arr.ind = TRUE),7] <- df.plasmid.ST.index[i,2]
+#	}
+
+# for(i in 1:nrow(df.plasmid.ST.index.pre)){
+#	df.plasmids.typed[which(df.plasmids.typed[,1] == df.plasmid.ST.index.pre[i,1], arr.ind = TRUE),7] <- df.plasmid.ST.index.pre[i,3]
+#	}
+
+# colnames(df.plasmids.typed) <- c("subject", "typing_plasmid", "fragment_pattern", "loci_pattern", "fragment_ST", "InterFragment_distance", "plasmid_ST")
+# df.plasmids.typed <- df.plasmids.typed[,c(1,2,3,4,7,5,6)]
+
+# Create reference file for loci sequence variants
+ref.loci.variant <- unique(loci.complete[,c(3,6,2)])
+
+# extract plasmid info from cumulative plasmid
+frag.plasmid.db <- cumulative.plasmid[,c(1,6,7,1,1,1,1,9)]
+colnames(frag.plasmid.db) <- c("name","start","end","strand","variant","fill","col","plasmid")
+frag.plasmid.db$strand <- rep(1,nrow(frag.plasmid.db))
+frag.plasmid.db$variant <- rep("fragment",nrow(frag.plasmid.db))
+frag.plasmid.db$fill <- rep("black",nrow(frag.plasmid.db))
+frag.plasmid.db$col <- rep("black",nrow(frag.plasmid.db))
+
+AMR.plasmid.db <- cumulative.AMR[,c(2,3,4,6,5,8,8,1)]
+colnames(AMR.plasmid.db) <- c("name","start","end","strand","variant","fill","col","plasmid")
+AMR.plasmid.db$col <- rep("black", nrow(AMR.plasmid.db))
+AMR.plasmid.db[which(AMR.plasmid.db$strand == "-", arr.ind = TRUE),4] <- "-1"
+AMR.plasmid.db[which(AMR.plasmid.db$strand == "+", arr.ind = TRUE),4] <- "1"
+AMR.plasmid.db[which(AMR.plasmid.db$variant == "AMR", arr.ind = TRUE),6] <- "red"
+AMR.plasmid.db[which(AMR.plasmid.db$variant == "STRESS", arr.ind = TRUE),6] <- "yellow"
+AMR.plasmid.db[which(AMR.plasmid.db$variant == "VIRULENCE", arr.ind = TRUE),6] <- "green"
+
+df.annotation <- rbind(frag.plasmid.db, AMR.plasmid.db)
+
+if(file.exists(paste0("./", selected.plasmid,"/results")) != TRUE){
+	system(paste0("mkdir ./", selected.plasmid, "/results"))
+	} else {
+	x <- 1
+	}
+
+# Annotation data for the entire dataset, used for mapping
+write.csv(df.annotation, paste0("./",selected.plasmid,"/results/",selected.plasmid,"_plasmid.data"), row.names = FALSE)
+
+# Detailed plasmid information, used for plasmid report page
+write.csv(cumulative.plasmid, paste0("./",selected.plasmid,"/results/",selected.plasmid, "_plasmid.results"), row.names = FALSE)
+
+# AMR location data for all plasmids in the current database
+write.csv(cumulative.AMR, paste0("./",selected.plasmid,"/results/",selected.plasmid, "_AMR.results"), row.names = FALSE)
+
+# Summary information of all plasmids after sequence, structure and interfragment distance typing
+write.csv(df.plasmids.typed, paste0("./",selected.plasmid,"/results/",selected.plasmid, "_summary.csv"), row.names = FALSE)
+
+# Definitions for individual fragments based on loci order
+write.csv(unique(df.loci.pattern.matrix[,c(2,3,4,5)]), paste0("./",selected.plasmid,"/results/",selected.plasmid, "_Reference_Structure_FragmentLoci.csv"), row.names = FALSE)
+
+# Definitions for plasmid structure type based on the re-ordered combination of fragment structure type
+write.csv(df.fragment.pattern.index, paste0("./",selected.plasmid,"/results/",selected.plasmid, "_StructureType_PlasmidLoci.csv"), row.names = FALSE)
+
+# Definitions of fragment sequence type based on the loci/allele combinations
+write.csv(df.fragment.ST.index, paste0("./",selected.plasmid,"/results/",selected.plasmid, "_SequenceType.csv"), row.names = FALSE)
+
+# Definitions for the plasmid structure typed based on the actual order of fragments
+write.csv(unique(df.condense.frag.order), paste0("./",selected.plasmid,"/results/",selected.plasmid, "_StructureType_PlasmidFragment.csv"), row.names = FALSE)
+
+
+write.csv(ref.loci.variant[order(ref.loci.variant$loci),], paste0("./",selected.plasmid,"/results/",selected.plasmid, "_Loci_Allele_Sequence.csv"), row.names = FALSE)
+
+# Backup data
+
+# Create backups of reference data
+cumulative.AMR.bak <- cumulative.AMR
+cumulative.plasmid.bak <- cumulative.plasmid
+df.annotation.bak <- df.annotation
+df.condense.frag.order.bak <- df.condense.frag.order
+df.plasmid.loci.order.bak <- df.plasmid.loci.order
+df.plasmid.loci.order.num <- df.plasmid.loci.order
+df.plasmid.loci.order.num.bak <- df.plasmid.loci.order.num
+
+# Backup of reference files
+df.plasmids.typed.bak <- df.plasmids.typed
+df.loci.pattern.matrix.bak <- df.loci.pattern.matrix
+df.fragment.pattern.index.bak <- df.fragment.pattern.index
+df.fragment.ST.index.bak <- df.fragment.ST.index
+ref.loci.variant.bak <- ref.loci.variant
+df.condense.loci.fragment.pattern.bak <- df.condense.loci.fragment.pattern
+cumulative.fragment.ST.bak <- cumulative.fragment.ST
+loci.complete.num.bak <- loci.complete.num
+
+
+# Prep work for the next stage
+
+df.condense.frag.order.con <- as.data.frame(matrix(0, nrow = nrow(df.condense.frag.order.bak), ncol = 2))
+rownames(df.condense.frag.order.con) <- rownames(df.condense.frag.order.bak)
+df.condense.frag.order.con[,1] <- df.condense.frag.order.bak[,ncol(df.condense.frag.order.bak)]
+
+for(i in 1:nrow(df.condense.frag.order.bak)){
+	current.list <- df.condense.frag.order.bak[i,1:(ncol(df.condense.frag.order.bak) - 1)]
+	if(length(grep(current.list, pattern = 0)) == 0){
+	df.condense.frag.order.con[i,2] <- paste0(current.list, collapse = " ")
+	} else {
+	df.condense.frag.order.con[i,2] <- paste0(current.list[which(current.list != 0, arr.ind = TRUE)], collapse = " ")
+	}
+	}
+
+
+unique.temp <- unique(df.condense.frag.order.bak)
+df.condense.frag.order.index <- as.data.frame(matrix(0, ncol = 2, nrow = nrow(unique.temp)))
+df.condense.frag.order.index[,1] <- unique.temp[,ncol(unique.temp)]
+for(i in 1:nrow(df.condense.frag.order.index)){
+	if(sum(which(unique.temp[i,] == "0")) != 0) {
+	df.condense.frag.order.index[i,2] <- paste0(unique.temp[i,1:(which(unique.temp[i,] == "0")[1] - 1)], collapse = " ")
+	} else {
+	df.condense.frag.order.index[i,2] <- paste0(unique.temp[i,1:(ncol(unique.temp)- 1)], collapse = " ")
+	}
+}
+
+
+save.image(paste0("./",selected.plasmid,"/data/Step5.Rdata")) 

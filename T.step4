@@ -1,0 +1,56 @@
+#!
+#########################################################
+# Help                                                  #
+#########################################################
+Help()
+{
+   # Display Help
+   echo "Add description of the script functions here."
+   echo
+   echo "Syntax: scriptTemplate [-g|h|v|V]"
+   echo "options:"
+   echo "H     Print this Help."
+   echo "p     Plasmid type to be evaluated"
+   echo "d     Directory and name of database"
+   echo "f     Path and filename of validated loci"
+   echo "i     Maximum allowed distance between loci (bp)"
+   echo
+}
+
+#########################################################
+# PROGRAM						  #
+#########################################################
+
+while getopts ":H:d:f:i:p:" opt; do
+   case $opt in
+      H) # Help info
+         Help
+         exit;;
+      d) # Path and name of external database
+         DBPATH="$OPTARG";;
+      f) # Path and file of validated loci
+         FASTAPATH="$OPTARG";;
+      i) # Piggy executable
+         INTERDISTANCE="$OPTARG";;
+      p) # Plasmid Type
+         PLASMID="$OPTARG";;
+      \?) #Invalid option
+      echo "Option does not exist"
+      exit;;
+   esac
+done
+
+
+echo Gathering sequence location data from database
+
+mkdir ./$PLASMID/fragments
+
+blastn -db $DBPATH -query $FASTAPATH -perc_identity 80.0 -outfmt 6 > ./$PLASMID/fragments/val_only.hits
+
+echo 
+
+echo Starting R script
+
+./R.step4 $INTERDISTANCE $PLASMID
+
+

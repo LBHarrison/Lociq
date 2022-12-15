@@ -1,0 +1,51 @@
+#!
+#########################################################
+# Help                                                  #
+#########################################################
+Help()
+{
+   # Display Help
+   echo "Add description of the script functions here."
+   echo
+   echo "Syntax: scriptTemplate [-g|h|v|V]"
+   echo "options:"
+   echo "H     Print this Help."
+   echo "a     Path containing analysis files"
+}
+
+#########################################################
+# PROGRAM						  #
+#########################################################
+
+while getopts ":Ha:" opt; do
+   case $opt in
+      H) # Help info
+         Help
+         exit;;
+      a) # Path to analysis files
+	 PATHWAYMR="$OPTARG";;
+      \?) #Invalid option
+      echo "Option does not exist"
+      exit;;
+   esac
+done
+
+# Navigate to appropriate directory
+cd $PATHWAYMR
+
+# Extract sequences from the PLSDB database using ID and range info stored in the 'batcher' file
+blastdbcmd -db db.indexed -entry_batch batcher > seqs.1
+
+# Remove range info from headers
+sed 's/:.*//' seqs.1 > seqs.2
+
+# Convert each sequence into sets of 2 lines, first being header second being sequence
+awk '/^>/ {printf("\n%s\n",$0);next; } { printf("%s",$0);}  END {printf("\n");}' < seqs.2 > seqs.3
+
+# Convert from multifasta sequence to col1 col2 format
+awk 'BEGIN{RS=">"}{print $1"\t"$2;}' seqs.3 | tail -n+2 > seqs.4.R
+
+# Cleanup
+rm seqs.1
+rm seqs.2
+rm seqs.3

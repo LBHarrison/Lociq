@@ -1,0 +1,68 @@
+#!
+#########################################################
+# Help                                                  #
+#########################################################
+Help()
+{
+   # Display Help
+   echo "Add description of the script functions here."
+   echo
+   echo "Syntax: scriptTemplate [-g|h|v|V]"
+   echo "options:"
+   echo "H     Print this Help."
+   echo "p     Plasmid type to be analyzed"
+   echo "D     Path and name of external database"
+   echo "M     Path and file of external database metadata file"
+   echo "i     Minimum within-group prevalence"
+   echo "o     Maximum outside-group prevalence"
+}
+
+#########################################################
+# PROGRAM						  #
+#########################################################
+
+while getopts ":HD:M:i:o:p:" opt; do
+   case $opt in
+      H) # Help info
+         Help
+         exit;;
+      p) # Plasmid Type
+	 PLASMID="$OPTARG";;
+      D) # External database
+         EXDB="$OPTARG";;
+      M) # Metadata file for external database
+         EXDBMET="$OPTARG";;
+      i) # minimum threshold value
+         MINWITHIN="$OPTARG";;
+      o) # maximum threshold value
+         MAXWITHOUT="$OPTARG";;
+      \?) #Invalid option
+      echo "Option does not exist"
+      exit;;
+   esac
+done
+
+cat ./$PLASMID/unvalidated/fwd.coding.coords |
+while read LINE LOCUS START END STRAND LENGTH SEQLINE
+	do 
+	echo \>$LOCUS
+	awk -v XLINE=$SEQLINE '{if(NR==XLINE) print $0}' ./roary/merged.gff | awk -v SEQSTART=$START -v SEQLEN=$LENGTH '{print substr($0,SEQSTART,SEQLEN + 1)}'
+	done > ./$PLASMID/unvalidated/unvalidated_FWDcoding.fasta
+cat ./$PLASMID/unvalidated/rev.coding.coords |
+while read LINE LOCUS START END STRAND LENGTH SEQLINE
+	do 
+	echo \>$LOCUS	
+	awk -v XLINE=$SEQLINE '{if(NR==XLINE) print $0}' ./roary/merged.gff | awk -v SEQSTART=$START -v SEQLEN=$LENGTH '{print substr($0,SEQSTART,SEQLEN + 1)}'| tr ACGTacgt TGCAtgca | rev
+	done > ./$PLASMID/unvalidated/unvalidated_REVcoding.fasta
+
+cat ./$PLASMID/unvalidated/unvalidated_FWDcoding.fasta ./$PLASMID/unvalidated/unvalidated_REVcoding.fasta ./$PLASMID/unvalidated/intergenic.fasta > ./$PLASMID/unvalidated/unvalidated_loci.fasta
+rm ./$PLASMID/unvalidated/unvalidated_FWDcoding.fasta
+rm ./$PLASMID/unvalidated/unvalidated_REVcoding.fasta
+
+mkdir ./$PLASMID/validated
+
+blastn -db $EXDB -query ./$PLASMID/unvalidated/unvalidated_loci.fasta -perc_identity 80.0 -outfmt 6 > ./$PLASMID/validated/validation.hits
+
+echo validation query complete
+
+./R.step3 $EXDBMET $MINWITHIN $MAXWITHOUT $PLASMID

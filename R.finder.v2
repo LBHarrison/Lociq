@@ -1,0 +1,92 @@
+#!/usr/bin/env Rscript
+
+args = commandArgs(trailingOnly=TRUE)
+project.name <- as.character(args)[1]
+selected.plasmid <- as.character(args)[2]
+
+
+# Load data
+refset <- read.csv(paste0("./",selected.plasmid,"/validated/validated_loci.ID"), sep = "\t", header = FALSE)
+dataset <- read.csv(paste0("./",project.name,"/newseq.loci"), sep = "\t", header = FALSE)
+loci.count <- as.character(t(read.table(paste0("./",selected.plasmid,"/fragments/indexing.loci"))))
+
+# Organize, clean and label data
+df.dataset.hits <- as.data.frame(dataset[which(dataset[,1] %in% refset[,1] == TRUE, arr.ind = TRUE),])
+
+df.dataset.hits <- droplevels(df.dataset.hits)
+df.dataset.hits[,13] <- rep(0, nrow(df.dataset.hits))
+colnames(df.dataset.hits)[c(7:10, 13)] <- c("loci.start", "loci.end", "sequence.start", "sequence.end", "orientation")
+
+# Assign locus directionality
+df.dataset.hits[which(df.dataset.hits$`sequence.start` < df.dataset.hits$`sequence.end`),13] <- 'plus'
+df.dataset.hits[which(df.dataset.hits$`sequence.start` > df.dataset.hits$`sequence.end`),13] <- 'minus'
+
+# Generate a reference file used by blastdbcmd to extract sequences from the database
+loci.coords <- as.data.frame(paste(df.dataset.hits[,2], paste(with(df.dataset.hits,pmin(sequence.start, sequence.end)),with(df.dataset.hits,pmax(sequence.start, sequence.end)), sep = "-"), df.dataset.hits[,13], sep = " "))
+
+# Provide a unique single identifier for plasmid/loci pair
+colnames(df.dataset.hits)[6] <- "unique"
+df.dataset.hits[,6] <- paste(df.dataset.hits[,2], df.dataset.hits[,1], sep = "_")
+
+n <- 0
+
+# Create a presence/absence matrix (PAM) detailing which loci are present in which plasmid
+plasmid.PAM <- as.data.frame.matrix(table(df.dataset.hits[,2], df.dataset.hits[,1]))
+plasmid.PAM[which(plasmid.PAM[] != 0, arr.ind = TRUE)] <- 1
+
+loci.count.new <- loci.count[which(is.na(match(loci.count, colnames(plasmid.PAM))) == FALSE, arr.ind = TRUE)]
+
+# Create an empty table that will be populated by information needed to index the plasmids to the fewest number of starting loci
+index.plasmid.PAM <- as.data.frame(matrix(0, nrow = nrow(plasmid.PAM), ncol = length(loci.count.new)+1))
+index.plasmid.PAM[,1] <- rownames(plasmid.PAM)
+
+index.plasmid.PAM[,2:ncol(index.plasmid.PAM)] <- plasmid.PAM[,loci.count.new]
+colnames(index.plasmid.PAM)[2:ncol(index.plasmid.PAM)] <- loci.count.new
+
+
+pre.blast.key.plasmid.PAM <- as.data.frame(matrix(0, ncol = 5, nrow=nrow(index.plasmid.PAM)))
+for(i in 1:nrow(index.plasmid.PAM)){
+	pre.blast.key.plasmid.PAM[i,1] <- index.plasmid.PAM[i,1]
+	pre.blast.key.plasmid.PAM[i,2] <-colnames(index.plasmid.PAM)[match(1, index.plasmid.PAM[i,])]
+	}
+
+if(length(which(index.plasmid.PAM[,2] == 0, arr.ind = TRUE)) == 0){
+	blast.key.plasmid.PAM <- pre.blast.key.plasmid.PAM
+} else {
+	keep.blast.key.plasmid.PAM <- subset(pre.blast.key.plasmid.PAM, pre.blast.key.plasmid.PAM[,2] != 0)
+	new.blast.key.plasmid.PAM <- subset(pre.blast.key.plasmid.PAM, pre.blast.key.plasmid.PAM[,2] == 0)
+	missing.plasmid.PAM <- plasmid.PAM[rownames(plasmid.PAM) %in% new.blast.key.plasmid.PAM[,1],]
+	n <- 0
+	while(length(nrow(missing.plasmid.PAM)) != 0){
+		missing.plasmid.PAM <- missing.plasmid.PAM[,order(colSums(missing.plasmid.PAM), decreasing = TRUE)]
+		missing.plasmid.PAM[which(missing.plasmid.PAM[,1] == 1, arr.ind = TRUE),1] <- colnames(missing.plasmid.PAM)[1]
+		new.blast.key.plasmid.PAM[new.blast.key.plasmid.PAM[,1] %in% rownames(missing.plasmid.PAM)[which(missing.plasmid.PAM[,1] != 0)] ,2] <- colnames(missing.plasmid.PAM)[1]
+		missing.plasmid.PAM <- missing.plasmid.PAM[,-1]
+		n <- n + 1
+		}
+	blast.key.plasmid.PAM <- rbind(keep.blast.key.plasmid.PAM, new.blast.key.plasmid.PAM)
+}
+
+blast.key.plasmid.PAM[,3] <- paste(blast.key.plasmid.PAM[,1], blast.key.plasmid.PAM[,2], sep = "_")
+for(i in 1:nrow(blast.key.plasmid.PAM)){blast.key.plasmid.PAM[i,4] <- df.dataset.hits[which(blast.key.plasmid.PAM[i,3] == df.dataset.hits[,6], arr.ind = TRUE),9][1]}
+for(i in 1:nrow(blast.key.plasmid.PAM)){blast.key.plasmid.PAM[i,5] <- df.dataset.hits[which(blast.key.plasmid.PAM[i,3] == df.dataset.hits[,6], arr.ind = TRUE),13][1]}
+
+# offset location of hits in the reverse strand by 1 so that subsequent sequence extraction ends immediately before the locus
+for(i in 1:nrow(blast.key.plasmid.PAM)){if(blast.key.plasmid.PAM[i,5] == "minus"){
+blast.key.plasmid.PAM[i,4] <- ((blast.key.plasmid.PAM[i,4]) + 1)
+} else {
+x <- 0
+}
+}
+
+
+# Write a list of the plasmids to be extracted
+write.table(blast.key.plasmid.PAM[,1], paste0("./",project.name,"/plasmid_list"), quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+# Write a table of the loci and position data used to index the plasmids specified above
+write.table(blast.key.plasmid.PAM[,c(1,4,5)], paste0("./",project.name,"/plasmid_index"), quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+
+# Write a list of just the loci used
+write.table(blast.key.plasmid.PAM[,2], paste0("./",project.name,"/analysis/indexing_loci.add"), quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+
+save.image("R.Finder.Rdata")
