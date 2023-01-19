@@ -86,11 +86,14 @@ if (!require("BiocManager", quietly = TRUE))
 BiocManager::install("DECIPHER")
 ```
 
-The last package to install is "[corrplot](https://cran.r-project.org/web/packages/corrplot/index.html)" (~10 seconds)
+The last package set to install is "[corrplot](https://cran.r-project.org/web/packages/corrplot/index.html)" and the packages for the shiny app "[shiny](https://cran.r-project.org/web/packages/shiny/index.html)", "[shinythemes](https://cran.r-project.org/web/packages/shinythemes/index.html)", "[DT](https://cran.r-project.org/web/packages/DT/index.html)", and "[genoPlotR](https://cran.r-project.org/web/packages/genoPlotR/index.html)"(~60 seconds)
 
 ```
 library(remotes)
 install_version("corrplot","0.84")
+
+library(pacman)
+p_install_version(c("shiny","shinythemes","DT","genoPlotR"), c("1.7.3", "1.2.0", "0.27", "0.8.11"))
 ```
 
 Finally, check to ensure the [R](https://cran.r-project.org/) dependencies were successfully installed with the following:
