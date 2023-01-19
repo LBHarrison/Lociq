@@ -1,0 +1,15 @@
+#!/usr/bin/env Rscript
+args = commandArgs(trailingOnly=TRUE)
+project.name <- as.character(args)[1]
+
+if(file.exists(paste0("./",project.name,"/data/Step6.Rdata")) == TRUE){
+	load(paste0("./",project.name,"/data/Step6.Rdata")) 
+	version <- 2
+	} else {
+	load(paste0("./",project.name,"/data/Step5.Rdata")) 
+	version <- 1
+	}
+
+library(shiny)
+
+runApp("./lociq", launch.browser = TRUE)
