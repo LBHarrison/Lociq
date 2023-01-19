@@ -276,3 +276,19 @@ The sixth step is used to analyze new plasmid sequences.  Once you have generate
 
 #### Output:
 The output for this step is the same as step 5, however it will be in in the ./(name-of-new-project) directory
+
+## Visualization:
+
+To launch the companion application to view the results, enter the following:
+
+```
+./lociq.viz <plasmid-type-of-interest>
+```
+
+OR
+
+```
+./lociq.viz <name-of-project>
+```
+
+In essence, the plasmid-type-of-interest and name-of-project simply refer to the parent directory where your results of interest are already stored.
