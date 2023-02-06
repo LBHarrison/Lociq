@@ -7,6 +7,8 @@ In short, the Lociq program is a MLST generator for closed, circular sequences t
 
 ## Installation:
 
+__A quick, guided installation video may be found [here](https://youtu.be/aD6Bs19t0lo)__
+
 First, make a directory for Lociq.  Navigate to your directory of choice and clone Lociq from github:
 ```
 git clone https://github.com/lbharrison/lociq.git
