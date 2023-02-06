@@ -1,4 +1,4 @@
-# Lociq_devel
+# Lociq
 
 ## Background
 
