@@ -113,6 +113,9 @@ quit()
 Optional:  Sample datasets may be accessed and prepared from here:  https://github.com/lbharrison/lociq_sample
 
 
+__A walkthrough to acquire sample datasets may be found [here](https://youtu.be/2S1Ps5-6afU)__
+
+
 
 ## Usage:
 ### Examples
