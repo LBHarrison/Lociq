@@ -5,7 +5,13 @@
 In short, the Lociq program is a MLST generator for closed, circular sequences that uses both sequence and structural components.  The program was designed with plasmid biology in mind as plasmid molecules are prone to selective pressures and recombination events that affect both plasmid sequence and plasmid structure.
 
 
-## Installation:
+## Installation I: Docker
+
+One option is to run Lociq through a [Docker](http://www.docker.com) container.  This process may be accessed [here](https://github.com/LBHarrison/Lociq_docker).
+
+https://github.com/LBHarrison/Lociq_docker
+
+## Installation II: Local
 
 __A quick, guided installation video may be found [here](https://youtu.be/aD6Bs19t0lo)__
 
