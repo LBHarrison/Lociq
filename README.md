@@ -289,7 +289,7 @@ The sixth step is used to analyze new plasmid sequences.  Once you have generate
 The output for this step is the same as step 5, however it will be in in the ./(name-of-new-project) directory
 
 ## Visualization:
-
+### Companion Application:
 To launch the companion application to view the results, enter the following:
 
 ```
@@ -303,3 +303,17 @@ OR
 ```
 
 In essence, the plasmid-type-of-interest and name-of-project simply refer to the parent directory where your results of interest are already stored.
+
+### Dendrogram Visualization:
+Finally, you may wish to generate a cgPMLST dendrogram of the plasmids based off the presence/absence of plasmid typing alleles.  Please keep in mind, this visualization only represents the different alleles in a binary format and does not account for the magnitude of sequence difference between alleles.
+
+To generate the the dendrogram, enter the following:
+```
+./simple_dend.sh <plasmid-type-of-interest>
+```
+
+OR
+
+```
+./simple_dend.sh <name-of-project>
+```
