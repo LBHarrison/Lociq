@@ -150,6 +150,15 @@ Please update the commands to reflect the correct paths, if necessary
 
 This will perform the entire analysis from pangenome construction to plasmid subtyping of the IncC plasmids plus the analysis of a new plasmid set (new.fasta) output into the ./addition directory
 
+### Other Plasmid Types
+
+This demonstration details how to perform the Lociq analysis to generate definitions for and characterize IncC plasmids.  To analyze a different plasmid type, the user must first identify the row-identifier for their plasmid type of interest.
+
+The appropriate row-identifier can be found in the first row of their plasmid metadata file.  In the sample data set, the "combinedplasmid.csv" is the plasmid metadata file.
+
+The row-identifier is the cell in the first column of this file that corresponds to the plasmid-type of interest.  For example, the row-identifier of the IncC plasmids is "IncC_1__JN157804".  If the user wanted to use this dataset to analyze other plasmid types, such as the IncI1.Alpha plasmids, they would choose the row-identifier "IncI1.I.Alpha._1__AP005147".  Keep in mind, however, the sample dataset is very small and is only intended to demonstrate the process on the IncC plasmids.  Evaluation of other plasmid types will require the user to supply their own sequences and metadata.
+
+
 ### Example Step Descriptions
 
 Construct the pangenome (~5 minutes)
