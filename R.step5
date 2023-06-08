@@ -614,6 +614,22 @@ if(file.exists(paste0("./", selected.plasmid,"/results")) != TRUE){
 	x <- 1
 	}
 
+# Adding a marker to designate the end of the sequence
+plasmid.ends <- read.csv(paste0("./",selected.plasmid,"/analysis/plasmid_intermediate"), header = FALSE, sep = "\t")
+df.plasmid.ends <- as.data.frame(plasmid.ends)
+df.plasmid.end.annot <- as.data.frame(matrix(0, nrow = nrow(df.plasmid.ends), ncol = 8))
+df.plasmid.end.annot[,1] <- "end"
+df.plasmid.end.annot[,2] <- df.plasmid.ends[,5] - 1
+df.plasmid.end.annot[,3] <- df.plasmid.ends[,5]
+df.plasmid.end.annot[,4] <- 1
+df.plasmid.end.annot[,5] <- "fragment"
+df.plasmid.end.annot[,6] <- "black"
+df.plasmid.end.annot[,7] <- "black"
+df.plasmid.end.annot[,8] <- df.plasmid.ends[,1]
+
+colnames(df.plasmid.end.annot) <- colnames(df.annotation)
+df.annotation <- rbind(df.annotation, df.plasmid.end.annot)
+						
 # Annotation data for the entire dataset, used for mapping
 write.csv(df.annotation, paste0("./",selected.plasmid,"/results/",selected.plasmid,"_plasmid.data"), row.names = FALSE)
 
