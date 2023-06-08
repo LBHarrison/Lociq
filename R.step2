@@ -57,6 +57,9 @@ df.plasmid.meta.an <- df.plasmid.meta
 df.plasmid.meta.an[which(df.plasmid.meta.an != 0, arr.ind = TRUE)] <- "black"
 df.plasmid.meta.an[which(df.plasmid.meta.an == 0, arr.ind = TRUE)] <- "white"
 
+# Addition to allow for the use of a metadata sheet that includes data for more than just the inhouse set of sequences
+df.plasmid.meta <- df.plasmid.meta[,which(colnames(df.plasmid.meta) %in% colnames(mx.loci.bin) == TRUE)]
+
 # Divide the dataset into plasmids that are/are not members of the group of interest
 # within.set <- as.matrix(mx.loci.bin[,colnames(df.plasmid.meta)[which(df.plasmid.meta[selected.plasmid,] != 0, arr.ind = TRUE)[,2]]])
 # without.set <- as.matrix(mx.loci.bin[,colnames(df.plasmid.meta)[which(df.plasmid.meta[selected.plasmid,] == 0, arr.ind = TRUE)[,2]]])
